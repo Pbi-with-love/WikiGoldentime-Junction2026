@@ -99,3 +99,16 @@ test("fmtNumber, fmtDate, langName, mtFromLabel, and fallbackNoteText format cle
     assert.ok(fallbackNoteText("fi", code).length > 0);
   }
 });
+
+test("ask.unchangedSince formats plain string with unformatted year for fi, sv, en", () => {
+  const expected = {
+    en: "This answer has not changed since 2003",
+    fi: "Vastaus ei ole muuttunut vuoden 2003 jälkeen",
+    sv: "Svaret har inte ändrats sedan 2003",
+  };
+  for (const code of SUPPORTED) {
+    const out = t("ask.unchangedSince", { year: 2003 }, code);
+    assert.ok(out.includes("2003"), `${code} output '${out}' must include 2003`);
+    assert.equal(out, expected[code]);
+  }
+});

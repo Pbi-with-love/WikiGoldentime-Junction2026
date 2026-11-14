@@ -486,7 +486,11 @@ export function createUI({
     if (!askRes.history_available || !askRes.milestones || askRes.milestones.length === 0) {
       milestonesHtml = `<p class="ask-no-history">${escapeHtml(t("ask.noHistory"))}</p>`;
     } else {
-      const n = askRes.milestones.length;
+      const m = askRes.milestones.length;
+      const stripTitle =
+        m === 1
+          ? t("ask.unchangedSince", { year: askRes.milestones[0].from_year })
+          : t("ask.changedTimes", { count: m - 1 });
       const nodesHtml = askRes.milestones
         .map((ms, idx) => {
           const isSelected = idx === activeMilestoneIdx;
@@ -588,7 +592,7 @@ export function createUI({
 
       milestonesHtml = `
         <div class="milestone-strip-section">
-          <div class="milestone-strip-title">${escapeHtml(t("ask.changedTimes", { count: n }))}</div>
+          <div class="milestone-strip-title">${escapeHtml(stripTitle)}</div>
           <div class="milestone-nodes-row">${nodesHtml}</div>
           ${selectedMsDetailHtml}
         </div>

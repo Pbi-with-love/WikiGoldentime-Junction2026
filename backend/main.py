@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import difflib
+import html
 import json
 import math
 import os
@@ -318,6 +319,11 @@ def _word_diff(old_text: str, new_text: str) -> list[dict[str, str]]:
     return merged
 
 
+def _clean_blocks(text: str) -> list[tuple[str, str]]:
+    """Convert wikitext to (tag, text) blocks with HTML entities unescaped."""
+    return [(tag, html.unescape(txt)) for tag, txt in history.clean(text)]
+
+
 def _diff_blocks(
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
@@ -573,7 +579,7 @@ def get_asof(page_id: int, at: str | None = None):
         "comment": row["comment"] or "",
         "row_start": _iso_utc(row["row_start"]),
         "row_end": None if is_current else row_end_iso,
-        "blocks": [[tag, txt] for tag, txt in history.clean(row["text"])],
+        "blocks": [[tag, txt] for tag, txt in _clean_blocks(row["text"])],
     }
 
 
@@ -597,8 +603,8 @@ def get_diff(
     if from_row is None or to_row is None:
         raise HTTPException(status_code=404, detail=f"Could not resolve diff revision for page_id {page_id}")
 
-    old_blocks = history.clean(from_row["text"])
-    new_blocks = history.clean(to_row["text"])
+    old_blocks = _clean_blocks(from_row["text"])
+    new_blocks = _clean_blocks(to_row["text"])
     return {"parts": _diff_blocks(old_blocks, new_blocks)}
 
 
