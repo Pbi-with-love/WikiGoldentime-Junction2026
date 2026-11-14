@@ -16,7 +16,7 @@ import {
 import { createGalaxyScene } from "./scene.js";
 import { createTimeSlider } from "./timeslider.js";
 import { createUI } from "./ui.js";
-import { lang as uiLang, applyStatic, t, saveViewState, consumeViewState } from "./i18n.js";
+import { lang as uiLang, applyStatic, t, saveViewState, consumeViewState, peekViewState, saveReloadCache, takeReloadCache } from "./i18n.js";
 import { buildSummaryCardList, mapSummaryCard } from "./summaryMap.js";
 
 const EDIT_WAR_DISPUTE_YEARS = {
@@ -50,6 +50,24 @@ async function init() {
   let articleLoadSeq = 0;
   let roadLoadSeq = 0;
   let summaryLoadSeq = 0;
+
+  // Spec 033: on a view-state restore of a Summary Trail, fetch its summary/compare now, in parallel
+  // with stars + timeline, instead of after the scene is built.
+  const peekedState = peekViewState();
+  const reloadCachePromise = peekedState ? takeReloadCache() : Promise.resolve(null);
+  const prefetched = new Map();
+  let lastCompare = null; // {key, data}: kept so a language switch can carry it over the reload
+  if (peekedState?.view === "summary" && peekedState.article) {
+    const { lang: pl, page_id: pid } = peekedState.article;
+    prefetched.set(`${pl}:${pid}`, {
+      summary: getSummary(pl, pid, uiLang),
+      compare: pl === "fi" ? reloadCachePromise.then((c) => (c?.compare?.key === `fi:${pid}` ? c.compare.data : getCompare("fi", pid))) : null,
+    });
+    for (const p of prefetched.values()) {
+      p.summary.catch(() => {});
+      p.compare?.catch(() => {});
+    }
+  }
 
   let stars = [];
   let globalTimeline = { months: [] };
@@ -244,6 +262,7 @@ async function init() {
 
     onBeforeLangSwitch() {
       saveViewState(captureViewState());
+      return saveReloadCache({ stars, timeline: globalTimeline, compare: lastCompare });
     },
 
     async onRoadBranchClick(branch) {
@@ -569,10 +588,13 @@ async function init() {
     let summaryOpened = false;
     let pendingCompare = null;
     let comparePromise = null;
+    const pre = prefetched.get(`${lang}:${page_id}`);
+    prefetched.delete(`${lang}:${page_id}`);
     if (lang === "fi") {
-      comparePromise = getCompare("fi", page_id)
+      comparePromise = (pre?.compare ?? getCompare("fi", page_id))
         .then((compareData) => {
           if (seq !== summaryLoadSeq) return null;
+          lastCompare = { key: `fi:${page_id}`, data: compareData };
           if (summaryOpened && ui.isSummaryTrailOpen()) {
             ui.attachSummaryCompare(compareData);
           } else {
@@ -588,7 +610,9 @@ async function init() {
     }
 
     try {
-      const summaryData = await getSummary(lang, page_id, uiLang);
+      const summaryData = await (pre?.summary ?? getSummary(lang, page_id, uiLang)).catch(() =>
+        getSummary(lang, page_id, uiLang)
+      );
       if (seq !== summaryLoadSeq) return;
       let compareDataForMap = null;
       if (cardRef && comparePromise) {
@@ -799,12 +823,16 @@ async function init() {
   }
 
   // Load initial stars + global timeline
-  const endInitLoading = beginLoading();
+  // No full-page loading state on a restore: stars come from the cache and the scene draws first.
+  const endInitLoading = peekedState ? () => {} : beginLoading();
   try {
-    const [loadedStars, loadedTimeline] = await Promise.all([
-      getStars(),
-      getGlobalTimeline(),
-    ]);
+    const cached = await reloadCachePromise;
+    const [loadedStars, loadedTimeline] = cached
+      ? [cached.stars, cached.timeline]
+      : await Promise.all([
+          getStars(),
+          getGlobalTimeline(),
+        ]);
     stars = loadedStars;
     globalTimeline = loadedTimeline;
     for (const s of stars) {
@@ -865,6 +893,12 @@ async function init() {
         yearInt !== lastPanelYear
       ) {
         lastPanelYear = yearInt;
+        // Spec 033: before the article's first revision /api/asof has no snapshot (404); close the panel instead.
+        const bornYear = activeStar.created_year ?? activeStar.first_edit_year;
+        if (bornYear && yearInt < bornYear) {
+          ui.closeArticlePanel();
+          return;
+        }
         const currentArticle = ui.getCurrentArticle();
         if (currentArticle && currentArticle.has_history) {
           await openStarArticle(activeStar.lang, activeStar.page_id, {

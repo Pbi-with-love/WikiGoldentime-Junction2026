@@ -302,10 +302,14 @@ export function createUI({
   });
 
   langSwitcher?.querySelectorAll(".lang-switch-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const code = btn.dataset.uiLang;
       if (code && code !== uiLang) {
-        onBeforeLangSwitch?.(code);
+        // Wait (max 500 ms) for the stars-cache write, then reload.
+        await Promise.race([
+          Promise.resolve(onBeforeLangSwitch?.(code)).catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, 500)),
+        ]);
         setLang(code);
       }
     });

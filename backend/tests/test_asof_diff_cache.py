@@ -182,11 +182,13 @@ def test_prewarm_fills_talvisota_cache_and_survives_errors(monkeypatch):
     state = {"queries": [], "today_rev": 23500447, "svt_opens": 0}
     rows_by_moment = {
         "2006-12-31 00:00:00": _make_row(2114325, "2006 teksti", user="Höyhens"),
+        "2012-12-31 00:00:00": _make_row(12468838, "2012 teksti", year=2012),
         "2026-12-31 00:00:00": _make_row(24273471, "2026 teksti", year=2026),
     }
     rows_by_rev = {
         "1862876": _make_row(1862876, "2006 milestone"),
         "2114325": _make_row(2114325, "2006 teksti", user="Höyhens"),
+        "12468838": _make_row(12468838, "2012 teksti", year=2012),
         "24273471": _make_row(24273471, "2026 teksti", year=2026),
         "23500447": _make_row(23500447, "today teksti", year=2026),
     }
@@ -205,11 +207,13 @@ def test_prewarm_fills_talvisota_cache_and_survives_errors(monkeypatch):
 
     main._prewarm_asof_diff()
     opens_after_prewarm = state["svt_opens"]
-    assert opens_after_prewarm == 5
+    assert opens_after_prewarm == 7  # 3 asof + 4 diffs (2006 card, 2006, 2012, 2026)
 
     # Subsequent calls hit cache without opening DB connections
     assert main.get_asof(1256, "2006-12-31")["rev_id"] == 2114325
+    assert main.get_asof(1256, "2012-12-31")["rev_id"] == 12468838
     assert main.get_asof(1256, "2026-12-31")["rev_id"] == 24273471
+    assert main.get_diff(1256, from_param="12468838", to_param="23500447")["parts"]
     assert main.get_diff(1256, from_param="1862876", to_param="23500447")["parts"]
     assert main.get_diff(1256, from_param="2114325", to_param="23500447")["parts"]
     assert main.get_diff(1256, from_param="24273471", to_param="23500447")["parts"]

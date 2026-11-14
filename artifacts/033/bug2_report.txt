@@ -1,0 +1,9 @@
+Spec 033 bug 2 (language switch in Summary Trail), built bundle via tunnel, fi Moskovan rauha (Osio 5/13, focusIdx 8) -> sv -> en
+BEFORE split (ms from click, 2 runs): unload+load ~300-400, /api/stars done 1250-1700 (1.8 MB gz, 10 MB json), scene +70, summary after scene +400, total 1.9-2.5 s.
+Chosen approach: keep reload. (1) prefetch summary(?ui)+compare at boot in parallel with stars (peekViewState);
+(2) carry stars + global timeline + fi compare over the reload in Cache Storage (saveReloadCache before reload, max 500 ms wait; takeReloadCache once, deleted, 60 s max age, network fallback on any error);
+(3) no full-page loading state on a restore.
+AFTER (5 runs, warm): sv 762,790,816,827,942 median 816 ms; en 764,784,828,880,1238 median 828 ms (click -> focused card heading = Fredsavtalet / Soviet breakthrough in February).
+Slider: never 2001 (absent until the scene exists, then 2026 = saved trail year). Loading overlay max 35-197 ms.
+Regression (bug2_flows.mjs): trail sv/en, road station 5 fi->en, Ask hero en->fi, overview fi: all restored, console errors 0, HTTP>=400 0.
+(REQFAIL on /api/stars in bug2_measure.mjs = fetch aborted by the script's own page.reload() between runs.)
