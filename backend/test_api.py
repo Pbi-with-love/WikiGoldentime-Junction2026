@@ -95,8 +95,16 @@ def test_stars_shape_counts_and_gzip():
         "lon",
     }
 
+    war_rows = 0
     for row in stars:
-        assert set(row.keys()) == expected_keys
+        keys = set(row.keys())
+        assert keys - {"war_years"} == expected_keys
+        if "war_years" in keys:
+            war_rows += 1
+            wy = row["war_years"]
+            assert row["lang"] == "fi" and row["has_history"]
+            assert wy and wy == sorted(set(wy))
+            assert all(isinstance(y, int) and row["first_edit_year"] <= y <= 2026 for y in wy)
         counts[row["lang"]] += 1
         assert isinstance(row["has_history"], bool)
         if row["has_history"]:
@@ -125,6 +133,12 @@ def test_stars_shape_counts_and_gzip():
     assert person is not None and person["lat"] is None and person["lon"] is None
     assert place is not None and 59.9 < place["lat"] < 60.5 and 24.5 < place["lon"] < 25.3
     assert located > 1000
+    assert war_rows >= 100
+    con = backend_main._open_rag()
+    cur = con.cursor()
+    cur.execute("SELECT DISTINCT LEFT(month, 4) FROM wikihistory.month_stats WHERE page_id = 1256 AND disputes >= 3")
+    assert talvisota["war_years"] == sorted(int(r[0]) for r in cur.fetchall())
+    con.close()
 
 
 def test_search_shape_empty_clamp_and_validation():

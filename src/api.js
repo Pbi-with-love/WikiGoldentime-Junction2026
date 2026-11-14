@@ -44,6 +44,7 @@ async function fetchJson(path) {
 
 /**
  * GET /api/stars
+ * Optional `war_years` (fi stars only): sorted ints, years with a month_stats edit-war month (disputes >= 3).
  */
 export async function getStars() {
   if (MOCK.stars) return mockGetStars();
