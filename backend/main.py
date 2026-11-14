@@ -34,6 +34,7 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("DB_PORT", "3307")
 
 from backend import ask, compare, history, rag_common, road, summary, svt_common, threads  # noqa: E402
+from backend.neighbours import war_years_from_months  # noqa: E402
 
 if svt_common.DB["port"] == 3308 and os.environ.get("DB_PORT") != "3308":
     svt_common.DB["port"] = int(os.environ.get("SVT_DB_PORT", 3307))
@@ -248,6 +249,19 @@ def _gap_fill_months(rows: list[tuple[str, int, int, int]]) -> list[dict[str, An
     return out
 
 
+def _attach_war_years(stars: list[dict], month_rows) -> None:
+    """month_rows: (page_id, 'YYYY-MM', disputes). Adds sorted `war_years` to fi stars that have one."""
+    by_page: dict[int, list[tuple]] = {}
+    for pid, month, disputes in month_rows:
+        by_page.setdefault(int(pid), []).append((month, disputes))
+    for st in stars:
+        if st["lang"] != "fi" or not st["has_history"]:
+            continue
+        years = war_years_from_months(by_page.get(st["page_id"], []))
+        if years:
+            st["war_years"] = years
+
+
 def _build_stars_payload() -> bytes:
     """Query and serialize the 29,460-star galaxy payload once per process."""
     con = _open_rag()
@@ -298,6 +312,8 @@ def _build_stars_payload() -> bytes:
                         "lon": float(lon) if lon is not None else None,
                     }
                 )
+            cur.execute("SELECT page_id, month, disputes FROM wikihistory.month_stats WHERE disputes >= 3")
+            _attach_war_years(stars, cur.fetchall())
             return json.dumps(stars, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         finally:
             cur.close()

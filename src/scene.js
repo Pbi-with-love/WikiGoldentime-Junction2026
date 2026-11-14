@@ -310,19 +310,6 @@ function formatStationYears(station) {
   return first === last ? String(first) : `${first}–${last}`;
 }
 
-// Deterministic edit-war years for the 50 has_history Finnish articles
-function getEditWarYearsForStar(star) {
-  if (!star.has_history) return [];
-  if (star.page_id === 1256) return [2006, 2007, 2008, 2014, 2018, 2022];
-  if (star.page_id === 1150) return [2006, 2007, 2008, 2014, 2018];
-  if (star.page_id === 52097) return [2007, 2014, 2018];
-  if (star.page_id === 440) return [2006, 2008, 2014, 2018];
-  const years = [2007];
-  if (star.page_id % 2 === 0) years.push(2006, 2014);
-  if (star.page_id % 3 === 0) years.push(2008, 2018);
-  return years.filter((y) => y >= (star.first_edit_year || 2004));
-}
-
 // Convert historical year (1150..2026) to non-linear spiral progress [0..1]
 function yearToSpiralProgress(year) {
   const y = Math.max(1150, Math.min(2026, year || 1900));
@@ -556,7 +543,7 @@ export function createGalaxyScene({
     firstEditYears[i] = s.created_year ?? s.first_edit_year ?? 2001;
     subYears[i] = ((i * 2654435761) >>> 0) / 4294967296;
     phases[i] = (i % 628) * 0.01;
-    editWarYearsByIndex[i] = getEditWarYearsForStar(s);
+    editWarYearsByIndex[i] = s.war_years || [];
   }
 
   const geometry = new THREE.BufferGeometry();

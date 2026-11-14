@@ -58,6 +58,7 @@ test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim exa
   const pkSet = new Set();
   const langsByWikidata = new Map();
   const starByKey = new Map();
+  let warCount = 0;
 
   for (const s of stars) {
     assert.ok(["fi", "sv", "en"].includes(s.lang));
@@ -81,6 +82,14 @@ test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim exa
     assert.ok(s.lon === null || typeof s.lon === "number");
     assert.equal(typeof s.has_history, "boolean");
 
+    if (s.war_years !== undefined) {
+      warCount++;
+      assert.equal(s.lang, "fi");
+      assert.ok(s.has_history && s.war_years.length > 0);
+      assert.deepEqual(s.war_years, [...new Set(s.war_years)].sort((a, b) => a - b));
+      assert.ok(s.war_years.every((y) => Number.isInteger(y) && y >= s.first_edit_year && y <= 2026));
+    }
+
     if (s.has_history) {
       historyCount++;
       assert.equal(s.lang, "fi", "Only Finnish articles have history");
@@ -100,6 +109,13 @@ test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim exa
       }
       langsByWikidata.get(s.wikidata_id).add(s.lang);
     }
+  }
+
+  if (!MOCK.stars && !MOCK.timeline) {
+    assert.ok(warCount >= 100, "real stars carry war_years");
+    const tl = await getArticleTimeline(1256);
+    const years = [...new Set(tl.months.filter((m) => m.disputes >= 3).map((m) => Number(m.month.slice(0, 4))))].sort((a, b) => a - b);
+    assert.deepEqual(starByKey.get("fi:1256").war_years, years);
   }
 
   assert.equal(counts.fi, 19285);
