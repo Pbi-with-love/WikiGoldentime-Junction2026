@@ -65,6 +65,11 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool) -> dict
             "milestones": ms_count,
             "hist_calls": stats.history_llm_calls,
             "max_calls": stats.max_llm_calls,
+            "windows_scanned": stats.windows_scanned,
+            "versions_read": stats.versions_read,
+            "sha1_cleaned": stats.sha1_cleaned,
+            "reverted_later": stats.reverted_later,
+            "scan_seconds": stats.scan_seconds,
             "cur_drop": stats.current_facts_dropped,
             "hist_drop": stats.history_facts_dropped,
             "failed_calls": stats.failed_calls,
@@ -90,6 +95,11 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool) -> dict
             "milestones": 0,
             "hist_calls": 0,
             "max_calls": 0,
+            "windows_scanned": 0,
+            "versions_read": 0,
+            "sha1_cleaned": 0,
+            "reverted_later": 0,
+            "scan_seconds": 0.0,
             "cur_drop": 0,
             "hist_drop": 0,
             "failed_calls": 1,
@@ -177,6 +187,8 @@ def _print_row(r: dict[str, Any]) -> None:
         f"[{r['idx']}/{r['total']}] {src_tag} origin={r['origin']} top={r['top']} "
         f"(exp={r['expected_pid']} match={r['match_exp']}) res={r['resolution']} sql={r['sql_mode']} "
         f"ms={r['milestones']} hist_calls={r['hist_calls']}/{r['max_calls']} "
+        f"win={r['windows_scanned']} ver={r['versions_read']} sha={r['sha1_cleaned']} "
+        f"rev_later={r['reverted_later']} scan={r['scan_seconds']:.2f}s "
         f"drop=cur:{r['cur_drop']}/hist:{r['hist_drop']} fail={r['failed_calls']} "
         f"tok={r['in_tok']}+{r['out_tok']} {r['elapsed']:.2f}s [{r['note']}] q={r['q']!r}",
         flush=True,

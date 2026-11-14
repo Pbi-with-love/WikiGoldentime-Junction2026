@@ -145,6 +145,13 @@ FROM wikihistory.article FOR SYSTEM_TIME ALL
 WHERE page_id = ?
 """
 
+WINDOW_VERSIONS_SQL = """
+SELECT rev_id, row_start, user, comment, sha1, text
+FROM wikihistory.article FOR SYSTEM_TIME ALL
+WHERE page_id = ? AND row_start BETWEEN ? AND ?
+ORDER BY row_start
+"""
+
 _table_lock = threading.Lock()
 _cache_table_ready = False
 
@@ -168,6 +175,11 @@ class AskBuildStats:
     max_llm_calls: int = ASK_MAX_LLM_CALLS_DEFAULT
     total_llm_calls: int = 0
     milestones: int = 0
+    windows_scanned: int = 0
+    versions_read: int = 0
+    sha1_cleaned: int = 0
+    reverted_later: int = 0
+    scan_seconds: float = 0.0
     current_facts_kept: int = 0
     current_facts_dropped: int = 0
     history_facts_kept: int = 0
@@ -180,6 +192,20 @@ class AskBuildStats:
     elapsed_seconds: float = 0.0
 
 
+@dataclass
+class WindowScanResult:
+    """Result of scanning a revision window for a candidate sentence-key change."""
+
+    confirmed: bool
+    changed_by_version: dict[str, Any] | None
+    first_holds: bool
+    end_holds: bool
+    versions_read: int
+    sha1_cleaned: int
+    reverted_later: int
+    missing_origin_warning: bool = False
+
+
 def _iso_utc(val: Any) -> str:
     """Format a datetime or SQL timestamp string as ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ."""
     if isinstance(val, datetime):
@@ -190,6 +216,11 @@ def _iso_utc(val: Any) -> str:
         text = text.split(".", 1)[0]
     dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sql_utc(val: Any) -> str:
+    """Format a datetime or ISO/SQL timestamp string as 'YYYY-MM-DD HH:MM:SS' UTC."""
+    return _iso_utc(val).replace("T", " ").rstrip("Z")
 
 
 def _article_url(lang: str, title: str, db_url: str | None) -> str:
@@ -218,18 +249,16 @@ def question_hash(q: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
-def compute_answer_hash(found: bool, facts: list[dict[str, Any]]) -> str:
-    """Return sha256 over found flag + sorted NFC/lowercased/ws-collapsed fact texts."""
-    norm_facts = sorted(
-        " ".join(unicodedata.normalize("NFC", str(f.get("text", ""))).lower().split())
-        for f in facts
-    )
-    canonical = json.dumps(
-        {"found": bool(found), "facts": norm_facts},
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+def sentence_key(found: bool, facts: list[dict[str, Any]]) -> frozenset[str]:
+    """Return the normalized source_sentence set for a period result (empty if not found)."""
+    if not found:
+        return frozenset()
+    keys: set[str] = set()
+    for fact in facts:
+        norm = summary.normalize_ws(str(fact.get("source_sentence", "")))
+        if norm:
+            keys.add(norm)
+    return frozenset(keys)
 
 
 def ensure_answer_cache_table(con: mariadb.Connection | None = None) -> None:
@@ -405,42 +434,335 @@ def filter_grounded_ask_facts(
     return kept, len(kept), dropped
 
 
-def merge_milestones(yearly_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge consecutive year entries with identical normalized answer hash into non-overlapping milestones."""
-    if not yearly_entries:
-        return []
-    milestones: list[dict[str, Any]] = []
-    prev_hash: str | None = None
-    for entry in yearly_entries:
-        ahash = compute_answer_hash(entry["found"], entry["facts"])
-        if milestones and ahash == prev_hash:
-            milestones[-1]["to_year"] = entry["year"]
-            continue
-        prev_hash = ahash
-        ms_url = entry["url"]
-        facts_out = [
-            {
-                "text": f["text"],
-                "source_sentence": f["source_sentence"],
-                "url": ms_url,
-            }
-            for f in entry["facts"]
-        ]
-        milestones.append(
-            {
-                "from_year": entry["year"],
-                "to_year": entry["year"],
-                "found": bool(entry["found"]),
-                "answer": entry["answer"],
-                "rev_id": int(entry["rev_id"]),
-                "user": entry["user"],
-                "comment": entry["comment"],
-                "row_start": entry["row_start"],
-                "url": ms_url,
-                "facts": facts_out,
-            }
+def clean_article_text(wikitext: str) -> str:
+    """Return whitespace-normalized plain text of a full wikitext revision."""
+    return summary.normalize_ws(format_cleaned_blocks(history.clean(wikitext)))
+
+
+MATERIAL_NUM_RE = re.compile(r"\d+")
+
+
+def material_tokens(sentence: str) -> frozenset[str]:
+    """Return digit tokens used for lightweight number-only change detection."""
+    return frozenset(MATERIAL_NUM_RE.findall(sentence))
+
+
+def change_holds(
+    cleaned_text: str,
+    new_sentences: set[str] | frozenset[str],
+    dropped_sentences: set[str] | frozenset[str],
+) -> bool:
+    """Return True when all new_sentences occur in cleaned_text, or when new is empty and dropped_sentences are absent."""
+    if new_sentences:
+        return all(s in cleaned_text for s in new_sentences)
+    return not any(s in cleaned_text for s in dropped_sentences)
+
+
+def scan_change_window(
+    versions: list[dict[str, Any]],
+    new_sentences: set[str] | frozenset[str],
+    dropped_sentences: set[str] | frozenset[str],
+) -> WindowScanResult:
+    """Scan ordered window revisions once, collapsing reverts to find the confirming origin edit."""
+    if not versions:
+        return WindowScanResult(
+            confirmed=True,
+            changed_by_version=None,
+            first_holds=False,
+            end_holds=True,
+            versions_read=0,
+            sha1_cleaned=0,
+            reverted_later=0,
+            missing_origin_warning=True,
         )
+
+    cleaned_by_sha1: dict[str, str] = {}
+    sha1_cleaned = 0
+
+    def _cleaned(ver: dict[str, Any]) -> str:
+        nonlocal sha1_cleaned
+        sha = ver.get("sha1")
+        sha_key = str(sha) if sha is not None else ""
+        if sha_key and sha_key in cleaned_by_sha1:
+            return cleaned_by_sha1[sha_key]
+        cleaned = clean_article_text(str(ver.get("text", "")))
+        sha1_cleaned += 1
+        if sha_key:
+            cleaned_by_sha1[sha_key] = cleaned
+        return cleaned
+
+    first_holds = change_holds(_cleaned(versions[0]), new_sentences, dropped_sentences)
+    if first_holds:
+        return WindowScanResult(
+            confirmed=False,
+            changed_by_version=None,
+            first_holds=True,
+            end_holds=True,
+            versions_read=len(versions),
+            sha1_cleaned=sha1_cleaned,
+            reverted_later=0,
+        )
+
+    current_origin: dict[str, Any] | None = None
+    origin_by_sha1: dict[str, dict[str, Any]] = {}
+    reverted_later = 0
+    last_holds = False
+
+    for ver in versions[1:]:
+        last_holds = change_holds(_cleaned(ver), new_sentences, dropped_sentences)
+        sha = ver.get("sha1")
+        sha_key = str(sha) if sha is not None else ""
+        if last_holds:
+            if current_origin is None:
+                if bool(ver.get("is_revert")) and sha_key and sha_key in origin_by_sha1:
+                    current_origin = origin_by_sha1[sha_key]
+                else:
+                    current_origin = ver
+            if sha_key and sha_key not in origin_by_sha1:
+                origin_by_sha1[sha_key] = current_origin
+        else:
+            if current_origin is not None:
+                reverted_later += 1
+                current_origin = None
+
+    if current_origin is not None:
+        return WindowScanResult(
+            confirmed=True,
+            changed_by_version=current_origin,
+            first_holds=False,
+            end_holds=True,
+            versions_read=len(versions),
+            sha1_cleaned=sha1_cleaned,
+            reverted_later=reverted_later,
+        )
+
+    return WindowScanResult(
+        confirmed=False,
+        changed_by_version=None,
+        first_holds=False,
+        end_holds=last_holds,
+        versions_read=len(versions),
+        sha1_cleaned=sha1_cleaned,
+        reverted_later=reverted_later,
+    )
+
+
+def _snapshot_for_year(
+    snapshots: list[dict[str, Any]],
+    from_year: int,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    for snap in snapshots:
+        if int(snap["year"]) >= from_year:
+            return snap
+    return fallback
+
+
+def _format_changed_by(version: dict[str, Any], lang: str) -> dict[str, Any]:
+    rev_id = int(version["rev_id"])
+    return {
+        "rev_id": rev_id,
+        "row_start": _iso_utc(version["row_start"]),
+        "user": str(version.get("user") or ""),
+        "comment": str(version.get("comment") or ""),
+        "url": _oldid_url(lang, rev_id, ""),
+    }
+
+
+def _make_milestone(
+    from_year: int,
+    to_year: int,
+    result: dict[str, Any],
+    snap: dict[str, Any],
+    changed_by: dict[str, Any] | None,
+    lang: str,
+) -> dict[str, Any]:
+    rev_id = int(snap["rev_id"])
+    ms_url = str(snap.get("url") or _oldid_url(lang, rev_id, ""))
+    facts_out = [
+        {
+            "text": f["text"],
+            "source_sentence": f["source_sentence"],
+            "url": ms_url,
+        }
+        for f in result["facts"]
+    ]
+    return {
+        "from_year": int(from_year),
+        "to_year": int(to_year),
+        "found": bool(result["found"]),
+        "answer": result["answer"],
+        "rev_id": rev_id,
+        "user": str(snap.get("user") or ""),
+        "comment": str(snap.get("comment") or ""),
+        "row_start": _iso_utc(snap["row_start"]),
+        "url": ms_url,
+        "changed_by": changed_by,
+        "facts": facts_out,
+    }
+
+
+def build_milestones(
+    snapshots: list[dict[str, Any]],
+    called_results: list[dict[str, Any]],
+    window_fetcher: Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]],
+    *,
+    lang: str = "fi",
+    stats: AskBuildStats | None = None,
+) -> list[dict[str, Any]]:
+    """Build non-overlapping milestones from called-year LLM results, confirming changes via window scans."""
+    if not snapshots or not called_results:
+        return []
+
+    first = called_results[0]
+    first_year = int(snapshots[0]["year"])
+    end_year = int(snapshots[-1]["year"])
+    first_snap = _snapshot_for_year(snapshots, first_year, first)
+
+    milestones: list[dict[str, Any]] = [
+        _make_milestone(
+            from_year=first_year,
+            to_year=end_year,
+            result=first,
+            snap=first_snap,
+            changed_by=None,
+            lang=lang,
+        )
+    ]
+    kept_key = sentence_key(bool(first["found"]), first["facts"])
+    last_called_snap = first
+
+    for cand in called_results[1:]:
+        cand_key = sentence_key(bool(cand["found"]), cand["facts"])
+        if cand_key == kept_key:
+            last_called_snap = cand
+            continue
+
+        new_sents = cand_key - kept_key
+        dropped_sents = kept_key - cand_key
+        covered_material = {tok for s in kept_key for tok in material_tokens(s)}
+        new_material = frozenset(
+            s for s in new_sents if material_tokens(s) - covered_material
+        )
+        if new_sents and not new_material:
+            # shortcut: number-only change detection; misses changes to names without numbers, upgrade with an LLM same-answer check if needed
+            last_called_snap = cand
+            continue
+
+        t_scan = time.monotonic()
+        versions = window_fetcher(last_called_snap, cand)
+        scan_res = scan_change_window(versions, new_material, dropped_sents)
+        scan_elapsed = time.monotonic() - t_scan
+
+        if stats is not None:
+            stats.windows_scanned += 1
+            stats.versions_read += scan_res.versions_read
+            stats.sha1_cleaned += scan_res.sha1_cleaned
+            stats.reverted_later += scan_res.reverted_later
+            stats.scan_seconds += scan_elapsed
+
+        if not scan_res.confirmed:
+            if scan_res.first_holds:
+                logger.info(
+                    "Window %s..%s: change predicate already holds on first version; merging into kept milestone",
+                    last_called_snap["year"],
+                    cand["year"],
+                )
+            last_called_snap = cand
+            continue
+
+        c_year = int(cand["year"])
+        p_last_year = int(last_called_snap["year"])
+        if scan_res.missing_origin_warning or scan_res.changed_by_version is None:
+            logger.warning(
+                "Window %s..%s: change holds at end with no origin; using C's year with changed_by=null",
+                p_last_year,
+                c_year,
+            )
+            from_year = c_year
+            changed_by = None
+        else:
+            origin_v = scan_res.changed_by_version
+            origin_year = int(_iso_utc(origin_v["row_start"])[:4])
+            from_year = max(p_last_year + 1, min(c_year, origin_year))
+            changed_by = _format_changed_by(origin_v, lang)
+
+        milestones[-1]["to_year"] = from_year - 1
+        ms_snap = _snapshot_for_year(snapshots, from_year, cand)
+        milestones.append(
+            _make_milestone(
+                from_year=from_year,
+                to_year=end_year,
+                result=cand,
+                snap=ms_snap,
+                changed_by=changed_by,
+                lang=lang,
+            )
+        )
+        kept_key = cand_key
+        last_called_snap = cand
+
+    milestones[-1]["to_year"] = end_year
     return milestones
+
+
+def _fetch_window_versions_from_db(
+    cur: Any,
+    page_id: int,
+    start_row_start: Any,
+    end_row_start: Any,
+    is_revert_by_rev_id: dict[int, bool],
+) -> list[dict[str, Any]]:
+    cur.execute(
+        WINDOW_VERSIONS_SQL,
+        (page_id, _sql_utc(start_row_start), _sql_utc(end_row_start)),
+    )
+    rows = _rows_as_dicts(cur)
+    for row in rows:
+        row["is_revert"] = is_revert_by_rev_id.get(int(row["rev_id"]), False)
+    return rows
+
+
+def _build_milestones_with_db(
+    snapshots: list[dict[str, Any]],
+    called_results: list[dict[str, Any]],
+    page_id: int,
+    lang: str,
+    rag_opener: Callable[[], mariadb.Connection],
+    stats: AskBuildStats | None = None,
+) -> list[dict[str, Any]]:
+    state: dict[str, Any] = {"con": None, "cur": None, "is_revert_map": None}
+
+    def fetch_window(p_snap: dict[str, Any], c_snap: dict[str, Any]) -> list[dict[str, Any]]:
+        if state["con"] is None:
+            con = rag_opener()
+            cur = con.cursor()
+            cur.execute("SET time_zone = '+00:00'")
+            vers = history.versions(cur, page_id, table="wikihistory.article")
+            state["con"] = con
+            state["cur"] = cur
+            state["is_revert_map"] = {int(v["rev_id"]): bool(v["is_revert"]) for v in vers}
+        return _fetch_window_versions_from_db(
+            state["cur"],
+            page_id,
+            p_snap["row_start"],
+            c_snap["row_start"],
+            state["is_revert_map"],
+        )
+
+    try:
+        return build_milestones(
+            snapshots=snapshots,
+            called_results=called_results,
+            window_fetcher=fetch_window,
+            lang=lang,
+            stats=stats,
+        )
+    finally:
+        if state["cur"] is not None:
+            state["cur"].close()
+        if state["con"] is not None:
+            state["con"].close()
 
 
 def _rows_as_dicts(cur: Any) -> list[dict[str, Any]]:
@@ -783,6 +1105,7 @@ def _run_history_llms(
                 "found": prev_result["found"],
                 "answer": prev_result["answer"],
                 "facts": list(prev_result["facts"]),
+                "called": False,
             }
             yearly_entries.append(entry)
             prev_result = entry
@@ -833,6 +1156,7 @@ def _run_history_llms(
             "found": found,
             "answer": answer,
             "facts": facts,
+            "called": idx in call_indices,
         }
         yearly_entries.append(entry)
         prev_result = entry
@@ -956,7 +1280,15 @@ def build_and_cache_ask(
             max_llm_calls=resolved_max_calls,
             stats=stats,
         )
-        milestones_out = merge_milestones(yearly_entries)
+        called_results = [e for e in yearly_entries if e.get("called")]
+        milestones_out = _build_milestones_with_db(
+            snapshots=snapshots,
+            called_results=called_results,
+            page_id=top_obj["page_id"],
+            lang=top_obj["lang"],
+            rag_opener=open_rag,
+            stats=stats,
+        )
     stats.milestones = len(milestones_out)
 
     payload = {
@@ -985,7 +1317,8 @@ def build_and_cache_ask(
 
     stats.elapsed_seconds = round(time.monotonic() - t0, 3)
     logger.info(
-        "ask built q_hash=%s top=%s:%s res=%s sql=%s ms=%d calls=%d/%d dropped=cur:%d/hist:%d tok=%d+%d %.2fs",
+        "ask built q_hash=%s top=%s:%s res=%s sql=%s ms=%d calls=%d/%d "
+        "win=%d ver=%d sha=%d rev_later=%d scan=%.2fs dropped=cur:%d/hist:%d tok=%d+%d %.2fs",
         q_hash[:12],
         stats.top_lang,
         stats.top_page_id,
@@ -994,6 +1327,11 @@ def build_and_cache_ask(
         stats.milestones,
         stats.history_llm_calls,
         resolved_max_calls,
+        stats.windows_scanned,
+        stats.versions_read,
+        stats.sha1_cleaned,
+        stats.reverted_later,
+        stats.scan_seconds,
         stats.current_facts_dropped,
         stats.history_facts_dropped,
         stats.input_tokens,

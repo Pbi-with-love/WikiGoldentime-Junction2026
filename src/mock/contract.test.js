@@ -262,7 +262,7 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
     }
   }
 
-  for (const ms of res.milestones) {
+  res.milestones.forEach((ms, idx) => {
     assert.equal(typeof ms.from_year, "number");
     assert.equal(typeof ms.to_year, "number");
     assert.equal(typeof ms.answer, "string");
@@ -271,13 +271,21 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
     if (!MOCK.ask) {
       assert.equal(typeof ms.found, "boolean");
       assert.ok(typeof ms.url === "string" && ms.url.includes("oldid="));
+      assert.ok(Object.hasOwn(ms, "changed_by"), `Milestone ${idx} must have changed_by key`);
+      if (idx === 0) {
+        assert.equal(ms.changed_by, null, "First milestone changed_by must be null");
+      } else if (ms.changed_by !== null) {
+        assert.equal(typeof ms.changed_by, "object");
+        assert.equal(typeof ms.changed_by.rev_id, "number");
+        assert.ok(typeof ms.changed_by.url === "string" && ms.changed_by.url.includes("oldid="));
+      }
       assert.ok(Array.isArray(ms.facts));
       for (const fact of ms.facts) {
         assert.ok(typeof fact.source_sentence === "string" && fact.source_sentence.length > 0);
         assert.ok(typeof fact.url === "string" && fact.url.includes("oldid="));
       }
     }
-  }
+  });
 
   // Non-history article ask returns history_available=false and empty milestones
   const noHistQuery = MOCK.ask ? "Vinterkriget" : "Who was Carl Ludvig Engel?";
