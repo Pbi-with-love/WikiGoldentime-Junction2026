@@ -28,6 +28,11 @@ Helsinki, Tampere band) is drawn under the bottom timeline bar/histogram (see ar
 Part B also fixes this: frame the geography camera/positions so the whole map sits above the slider at 1280x720 and
 at narrow widths (Playwright screenshots of the Geography lens at both sizes).
 
+**Amendment 023-B (orchestrator):** `event_year` in STARS_SQL (backend/main.py) scans 1,000 chars after the first
+newline and crosses into the first `## ` section (e.g. "Suomi toisessa maailmansodassa" -> 1920 from "1920- ja
+1930-luvuilla"). Part B restricts it to the lead (text before the first `## `), the same rule spec 024 road.py uses, so
+the History lens and the road agree. Report how many stars change event_year / become null.
+
 ## Part B — API + UI (ONLY after spec 022 is merged: same /api/stars route and scene.js)
 - [ ] `/api/stars` adds `created_year` (int|null) for every star from article_created (LEFT JOIN; keep `first_edit_year`
       unchanged for history semantics). /api/stars stays < 1 s.
