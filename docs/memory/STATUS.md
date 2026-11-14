@@ -39,6 +39,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 008-chunks | spec ready (embed on VPS overnight, tmux embed, nice) |
 - 009-api-summary | spec ready |
 - 010-api-ask | spec ready (hero demo, Way A) |
+- 011-wayb-spike | spec ready (gate: 010 done; half a day; findings -> docs/memory/research/wayb-spike.md) |
 
 ## Backlog (proposed specs, in order)
 Phase 0 — groundwork
