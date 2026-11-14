@@ -37,6 +37,8 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
   project in the Orca UI and re-add it as git before the next parallel run.
 
+## 19:20 UTC — rule: Playwright E2E on the deployed build before ship (ARCHITECTURE 'Definition of done'); Hydrogen = main code, Claude Sonnet = parallel parts
+
 ## 18:55 UTC — demo dry run done (docs/memory/research/demo-dryrun.md, DEMO.md updated)
 - Fixes running in parallel: 020 summary language + en/sv reference headings (Hydrogen high),
   021 UI: search "also in" chips + 2006 milestone shows changed_by on the card (Claude Sonnet).
@@ -128,6 +130,8 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 ## Specs
 - 014-display-fixes | done | html.unescape in /api/asof + /api/diff (0 '&ndash;' on asof 1256 @2006), Ask strip = milestones-1 changes, 1 milestone -> 'has not changed since {year}' fi/sv/en; npm test 16/16 (orchestrator rerun), VPS pytest 25/25, 5 screenshots artifacts/screenshots/014-display-fixes/ |
 - 016-summarize-multilingual | done | 1256 ui=sv -> native sv 23612 Vinterkriget (6 sec), ui=en -> en 33924 Winter War (12 sec), fi_history + history_status ready; 966363 ui=sv translated (25 sec); ask hero ui=en all-English milestones, 2006 -> 1862876 (orchestrator curl); pytest 38/38 VPS, npm test 17/17 (orchestrator rerun); new table wikirag.history_cache (fallback, 0 rows) -> 018 should replace/absorb it; fixed: non-fixture stars could not open the panel (getThreads 404) |
+- 025-ask-live-answers | in progress (Hydrogen high) | UI auto-poll while pending (~30 s build), question-language guard on ask answers (en question got a Finnish answer), Playwright E2E on deployed build |
+- 024-real-road | spec in writing (real per-article road + memory threads; Hydrogen after 022, parallel parts to Sonnet) |
 - 022-geography-coords | in progress (Claude Sonnet) | /api/stars had lat/lon hard-coded None -> Geography lens empty; fetch Wikidata P625/P276 into article_geo |
 - 023-article-birth-timeline | Part A in progress (Claude Sonnet: created dates sv/en via MediaWiki API, fi from SVT); Part B after 022 (stars created_year, slider from 2001) |
 - 021-ui-demo-fixes | done (Claude Sonnet) | search chips: API 'also' map is keyed by wikidata_id from the first row's lang -> UI now merges same-wikidata rows and drops own lang (fi Talvisota: sv,en); 2006 card shows 'Edited by Whiskey~fiwiki on 7 Nov 2006 oldid=1862876' without click (fi: 'Muokannut … (7.11.2006)'); npm test 20/20 mock + REAL=search; dist deployed index-k3gGLco9.js; screenshots artifacts/screenshots/021-ui-demo-fixes/ |
