@@ -23,6 +23,16 @@ station list for Hallin Janne and Talvisota in worker_done. Also handle the lead
 taking a misleading year from its lead sentence, e.g. "Suomi toisessa maailmansodassa" -> 1920): prefer event_year from
 the stars data; state the rule.
 
+**Amendment 024-B (user bug, 2026-11-14): Part A1 = threads only, ahead of the road.** User report: selecting a star
+draws link lines to a few neighbours only for some stars; most stars get no lines at all. Cause (orchestrator): the
+lines are memory threads (src/main.js ~543 -> sceneCtrl.setThreads); `MOCK.threads` is still true, so only the ~50 mock
+fixture stars have threads, the rest get `[]`. **Part A1 (Claude Sonnet, starts as soon as spec 022 is merged):** add the
+real threads route in backend/main.py using Part B's backend/threads.py, set `MOCK.threads = false`, keep the contract
+shape (ghost check mock-only as Part B decided), make sure every star with neighbours gets lines (check the year filter
+in main.js ~564 `filteredThreads` does not hide them all, given created_year from spec 023), deploy, and Playwright on
+the deployed build: open 5 random stars (fi/sv/en) and Talvisota, each shows >= 1 line + the threads list; screenshots;
+0 console errors. The road itself stays Part A2 (Hydrogen, after the 024 design).
+
 ## How the UI reaches it (no new endpoint)
 - Panel button "See as a road" (`#panel-road-btn`, ui.js ~2585) -> `onEnterRoad({lang, page_id})` ->
   main.js `enterTalvitieRoad` -> `getTopicRoad({lang, page_id})`. Unchanged; only the flag flips.
