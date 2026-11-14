@@ -10,6 +10,17 @@ Every article image the app shows carries a proper Commons credit: author, licen
 licence text when Commons gives a URL) and a link to the Commons file page. Non-free images are
 never shown. All our calls to Wikimedia send a descriptive User-Agent with a real contact.
 
+
+**Amendment 019-A (user decision, after Part A merged as e0ffbcc): show Credit when the artist is missing.**
+Part A found 578 rows without artist, 165 distinct files of them with a Commons `Credit` value (e.g. "SA-kuva"), but did not store it.
+Part B therefore also: (1) adds a nullable `credit` column to `wikirag.article_image` in a new migration
+`backend/scripts/migrate_019b_image_credit.sql` (approved); (2) extends `scripts/fetch_images.py --credits-only` with a
+resumable mode that fetches extmetadata `Credit` (HTML stripped to plain text, max 200 chars) only for rows where
+`artist IS NULL OR artist = ''` (expected ~4 requests), same User-Agent and politeness; (3) exposes `credit` in the
+`/api/article` `image` object; (4) the caption uses `credit` in place of the artist when the artist is missing
+("Kuva: {credit}, {license}" / "Bild: …" / "Image: …"); only when both are missing does it fall back to "Wikimedia Commons".
+Evidence: rows with credit filled, request count, screenshot of one credit-only image (e.g. an SA-kuva photo).
+
 ## Two parts (separate dispatches)
 | Part | What | Files | When |
 |---|---|---|---|
