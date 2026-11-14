@@ -117,7 +117,7 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 
 ## Specs
 - 014-display-fixes | done | html.unescape in /api/asof + /api/diff (0 '&ndash;' on asof 1256 @2006), Ask strip = milestones-1 changes, 1 milestone -> 'has not changed since {year}' fi/sv/en; npm test 16/16 (orchestrator rerun), VPS pytest 25/25, 5 screenshots artifacts/screenshots/014-display-fixes/ |
-- 016-summarize-multilingual | in progress (Hydrogen ctx_2be0ed17dd08; spec + amendment A) |
+- 016-summarize-multilingual | done | 1256 ui=sv -> native sv 23612 Vinterkriget (6 sec), ui=en -> en 33924 Winter War (12 sec), fi_history + history_status ready; 966363 ui=sv translated (25 sec); ask hero ui=en all-English milestones, 2006 -> 1862876 (orchestrator curl); pytest 38/38 VPS, npm test 17/17 (orchestrator rerun); new table wikirag.history_cache (fallback, 0 rows) -> 018 should replace/absorb it; fixed: non-fixture stars could not open the panel (getThreads 404) |
 - 018-section-history-table | spec ready (after 017; wikihistory.section_history, ~19,285 rows expected = fi pages in both wikirag and wikihistory) |
 - 017-cross-language-compare | spec + design done (docs/design/017-cross-language-compare.md); Hydrogen after 016 |
 - 015-ask-ui-translate-only | done | ui variant = deep copy of default + 1 batched translation call; hero en+fi identical milestones for ui /fi/sv/en (orchestrator curl, 2006 -> 1862876); 9 ui rows rebuilt (6 LLM calls, 0 fallbacks), +1 sv default row; pytest 24/24 + 9/9 VPS, npm test 16/16 mock + REAL=ask (orchestrator rerun mock), cache hit 2.4–3.0 ms. Known: same-language copy keeps milestone facts[].text in Finnish for en/sv questions -> fix in 016; summary ?ui= re-picks facts (8/14 sections of fi 1256 differ ui=en) -> 016 |
