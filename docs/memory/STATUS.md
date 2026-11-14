@@ -2,6 +2,32 @@
 
 One line per spec: id | state | evidence. Keep the "Now" section current.
 
+## CHECKPOINT 2026-11-14 22:35 EET (20:35 UTC) — session handoff, READ THIS FIRST
+State: specs 012–026 merged and deployed (VPS :8002 serves dist index-zLNeP6kO.js, commit 896cb96). No mock left in the
+UI (only the unused /api/road). Dataset M fully loaded (19,742 fi / 862,076 versions). Demo script: docs/DEMO.md;
+dry runs: docs/memory/research/demo-dryrun{,-2}.md.
+Running now (Orca run run_df92b95f1f42, all in `--worktree current`, shared folder):
+- 027 compare precision (B2) — Hydrogen dispatch ctx_05cb797dfe60 (or ctx_1c58c107412e; check `orca orchestration
+  worker-list`), continuing a Claude worker's uncommitted partial diff in backend/compare.py + scripts/calibrate_compare.py.
+- 028 language switch in every view (B6) — Hydrogen, edits src/ui.js, src/main.js, src/i18n.js (uncommitted, on disk).
+- Dry run 3 (Claude subagent of the old session, writes docs/DEMO.md + docs/memory/research/demo-dryrun-3.md +
+  artifacts/demo-dryrun-3/) — may be lost with the session; if demo-dryrun-3.md is missing, rerun it on the final build.
+On worker_done: check scope with `git status`, rerun `npm test` + pytest on the VPS
+(`cd ~/wikimemory && .venv/bin/python -m pytest backend/test_api.py backend/tests -q`, expect 82+ passed), require the
+Playwright E2E evidence on the DEPLOYED build (ARCHITECTURE "Definition of done"), commit only that spec's files,
+then `npm run build` + rsync dist (ARCHITECTURE "Frontend deploy") and check the served hash.
+Next (in order): (1) merge 027 + 028, clean redeploy; (2) Playwright E2E suite kept in the repo (e2e flows for all
+features, one command, against the deployed build) — Claude Sonnet worker after its usage limit resets 00:10 EET, or
+Hydrogen; (3) dry run 3 / final presenter script; (4) user: Orca re-registration as a git repo (needs the Orca UI;
+`orca repo add --kind git` only returns the folder registration) so parallel workers get new-child worktrees.
+Rules from the user (also in memory): Vietnamese replies; run anything parallel that does not share files
+(Hydrogen = main code via `--model gemini-4-hydrogen-high`, never plain `hydrogen` which runs XHigh; Claude Sonnet
+workers `--agent claude --model claude-sonnet-5-5` for parallel parts, prompt must start "You are an Orca implementation
+worker, not the orchestrator"); Playwright E2E on the deployed build before shipping anything; multilingual is core
+(native sv/en first, translation second); never bulk-embed on the VPS.
+Open known limits: compare recall 0.747; number-only milestone detection; hero en milestones now 2003/2005/2006(1862876)/2021.
+Antigravity quota: two Hydrogen at once can hit "Individual quota reached" (~6 min reset) — resend "continue" after reset.
+
 ## Now
 - Frontend: done on mock data (galaxy, search, Summarize 3D cards, Through time, Ask with history,
   memory threads, topic road with 3 fixed mock topics). Evidence: contract test 11 passed,
