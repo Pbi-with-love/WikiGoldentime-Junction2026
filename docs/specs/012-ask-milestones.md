@@ -41,6 +41,12 @@ snapshot revision. After this fix:
   `row_start`. P's snapshot is the snapshot of the last called year in the kept run, and C's is
   the snapshot of the called year being tested. Windows of one question do not overlap.
 
+**Amendment A2' (orchestrator, 2026-11-14 after the first B2):** `holds(text)` is true when every
+sentence in `new` is a substring of the cleaned text, if `new` is non-empty. Only when `new` is empty,
+`holds(text)` is true when no sentence in `dropped` is in the text. Reason: in the first rebuild the
+LLM switched to another sentence while the dropped Hanko sentence stayed in the article until 2026,
+so no change after 2005 was ever confirmed and the hero check failed.
+
 ## Response shape (additive only)
 Every milestone gets one new key, and all other keys keep their names, types and meaning:
 ```json
