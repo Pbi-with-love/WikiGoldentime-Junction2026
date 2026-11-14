@@ -19,6 +19,15 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Server data: dataset S + vectors on 3307; wikihistory (50 articles / 31,848 versions) on 3308 AND
   merged into 3307 (spec 002). Done: UMAP coords, images, chunks table, summaries, ask, LLM key.
 
+## Now 14:50 UTC
+- Dataset M load RUNNING since 14:45 UTC: tmux `loadM` on VPS, organizers' load.py with our venv,
+  `DB_PORT=3307 nice -n 19 ... load.py --list data/articles-all.tsv` (19,754 articles, 50 already loaded),
+  log ~/wikimemory/loadM.log (START/LOAD_EXIT/END lines); 3307 capped `--cpus 1.5`, the tmux chain resets
+  `--cpus 0` when done. After: history_stats, report versions/page_ids, re-prewarm demo summaries.
+- 013 Hydrogen dispatched (ctx_96d2c6da714c, worktree current, alone).
+- Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
+  project in the Orca UI and re-add it as git before the next parallel run.
+
 ## User decisions 14:05 UTC
 - 011: compare snapshots by sha1; lang='fi' for every row (dataset M is Finnish only).
 - Parallel workers: re-register the project in Orca as a git repo, then `--worktree new-child` for every
@@ -97,7 +106,7 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 - 009-api-summary | done | /api/summary real (MOCK.summary=false); claude-haiku-5-5, facts carry verbatim source sentence (92/92 grounded on fi 1256/1150/440); summary_cache pre-warmed; cache hit ~3-7 ms, miss = extractive + background LLM; Talvisota: 14 sections, 5 ghost sections; contract REAL=summary 11/11, mock 11/11 (orchestrator rerun); Playwright `artifacts/screenshots/009-api-summary/` |
 - 010-api-ask | done | /api/ask real (MOCK.ask=false); hero 'How did the Winter War end?' -> top fi 1256 via en/sv->fi sibling, history_available, 5 milestones (signing date drifts '13 March' -> 'evening of 12 March, in effect 13 March'); cache hit 4 ms on VPS; 25/25 pytest, contract REAL=ask 11/11; answer_cache pre-warm of data/demo-questions.tsv (40) continues in tmux answers. Follow-ups: diff rejects 4-digit rev_id (oldid=6110 -> 404, _REV_ID_RE in main.py); re-run build_answers after full chunk embed |
 - 012-ask-milestones | done | A2'' number-based change detection + changed_by; hero en+fi: 2003 "13 March" -> 2005 rewrite (590107) -> 2006 "evening of 12 March" changed_by 1862876 Whiskey~fiwiki -> 2009 en/2011 fi new facts (105 days / 1721 comparison); pytest 21/21 (10 A5 + A6 live), npm test 11/11 mock + 11/11 REAL=ask, SUMMARY ok=29 warn=11 errors=0 llm_calls=438 wall 620 s, answer_cache 41, cache hit 2.2 ms (orchestrator re-checked hero JSON). Limits: number-only detection (name-only changes missed); 5 history questions now 1 milestone; [38] all-unfound; 3 no-history |
-- 013-i18n | design done (docs/design/013-i18n.md, incl. optional changed_by on Ask milestone); Hydrogen waits for 012 merge; UI spec: Argon design first, Hydrogen only after 012 is done; src/i18n.js, ?ui= on summary/ask, ui column in summary_cache/answer_cache; written in parallel with 012 — check its milestone-rendering assumption against 012) |
+- 013-i18n | in progress (Hydrogen ctx_96d2c6da714c) — design done (docs/design/013-i18n.md, incl. optional changed_by on Ask milestone); Hydrogen waits for 012 merge; UI spec: Argon design first, Hydrogen only after 012 is done; src/i18n.js, ?ui= on summary/ask, ui column in summary_cache/answer_cache; written in parallel with 012 — check its milestone-rendering assumption against 012) |
 - 011-wayb-spike | done (verdict: keep Way A) | chunk_vector_hist 17,791 rows (1,341 current) built in 16.7 s, 0 embeddings (orchestrator recount); VECTOR INDEX works WITH SYSTEM VERSIONING and is used under AS OF (9.5–13 ms vs 1.27–1.58 s scan) but HNSW post-filters row_start/row_end -> overlap@10 only 5–7/10 vs exact scan at 2015 (4.3% rows live); docs/memory/research/wayb-spike.md |
 
 ## Backlog (proposed specs, in order)
