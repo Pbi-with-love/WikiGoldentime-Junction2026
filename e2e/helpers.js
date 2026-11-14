@@ -25,15 +25,11 @@ export async function ready(page) {
   // Wait for initial data fetch (#status-loading hidden)
   await expect(page.locator('#status-loading')).toBeHidden({ timeout: 20_000 });
 
-  // If intro sweep is still running, click once on the canvas to jump to 2026 (DEMO.md warm-up)
-  const current = (await numeral.textContent())?.trim();
-  if (current !== '2026') {
-    await page.locator('#galaxy-canvas').click({ position: { x: 640, y: 360 } });
-    // A persisted non-2026 year can survive a language reload without an intro sweep.
-    if ((await numeral.textContent())?.trim() !== '2026') {
-      await page.getByRole('slider', { name: 'Selected year in Wikipedia history' }).focus();
-      await page.keyboard.press('End');
-    }
+  // End the intro sweep via the slider (End key). A canvas click would open a star's article panel
+  // (it opened Suinulan verilöyly, id 8646) and leave it open for the rest of the test.
+  if ((await numeral.textContent())?.trim() !== '2026') {
+    await page.getByRole('slider', { name: 'Selected year in Wikipedia history' }).focus();
+    await page.keyboard.press('End');
   }
 
   await expect(numeral).toHaveText('2026', { timeout: 15_000 });
