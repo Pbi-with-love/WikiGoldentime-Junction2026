@@ -754,7 +754,16 @@ export function createGalaxyScene({
     const sliderEl = document.getElementById("timeslider-root");
     const headerRect = headerEl && !headerEl.hidden ? headerEl.getBoundingClientRect() : null;
     const sliderRect = sliderEl && !sliderEl.hidden ? sliderEl.getBoundingClientRect() : null;
-    const safeTop = (headerRect && headerRect.height > 0 ? headerRect.bottom : 0) + margin;
+    // Bug fix: overlay cards/constellation bar live inside the header but are not top-bar rows.
+    let topBarBottom = headerRect && headerRect.height > 0 ? headerRect.top : 0;
+    if (headerEl && headerRect && headerRect.height > 0) {
+      for (const child of headerEl.children) {
+        if (child.hidden || child.matches(".left-overlay-card, #constellation-bar")) continue;
+        const cr = child.getBoundingClientRect();
+        if (cr.height > 0) topBarBottom = Math.max(topBarBottom, cr.bottom);
+      }
+    }
+    const safeTop = topBarBottom + margin;
     // Spec 033: in portrait the legend sits right above the slider; keep the map above it too.
     const legendEl = document.getElementById("sky-legend");
     const legendRect = isPortraitGeo && legendEl && !legendEl.hidden ? legendEl.getBoundingClientRect() : null;
@@ -763,7 +772,17 @@ export function createGalaxyScene({
       legendRect && legendRect.height > 0 ? legendRect.top : h
     );
     const safeBottom = bottomEdge - margin;
-    const safeLeft = margin;
+    // A visible left overlay card is a left exclusion on landscape, unless it leaves < 40% width.
+    let safeLeft = margin;
+    if (!isPortraitGeo) {
+      for (const card of document.querySelectorAll(".left-overlay-card")) {
+        if (card.hidden) continue;
+        const cr = card.getBoundingClientRect();
+        if (cr.width > 0 && cr.height > 0 && w - (cr.right + margin) >= w * 0.4) {
+          safeLeft = Math.max(safeLeft, cr.right + margin);
+        }
+      }
+    }
     const safeRight = w - margin;
     cachedSafeArea = {
       left: safeLeft,
@@ -3130,27 +3149,33 @@ export function createGalaxyScene({
       const uiResizeObserver = new ResizeObserver((entries) => {
         const prevTop = cachedSafeArea?.top;
         const prevBottom = cachedSafeArea?.bottom;
+        const prevLeft = cachedSafeArea?.left;
         refreshUiMetrics();
         if (
           currentLens === "geography" &&
           !inRoadMode &&
           !inSummaryMode &&
-          (cachedSafeArea?.top !== prevTop || cachedSafeArea?.bottom !== prevBottom) &&
-          entries.some((e) => e.target.id === "sky-top-bar" || e.target.id === "timeslider-root")
+          (cachedSafeArea?.top !== prevTop || cachedSafeArea?.bottom !== prevBottom || cachedSafeArea?.left !== prevLeft) &&
+          entries.some((e) => ["sky-top-bar", "timeslider-root", "ask-panel", "search-results-panel"].includes(e.target.id))
         ) {
           applyGeographyCameraPose({ immediate: reducedMotion || !glideActive });
         }
       });
-      for (const id of UI_EXCLUSION_IDS) {
+      for (const id of [...UI_EXCLUSION_IDS, "ask-panel", "search-results-panel"]) {
         const el = document.getElementById(id);
         if (el) uiResizeObserver.observe(el);
       }
     }
     if (typeof MutationObserver !== "undefined") {
       const uiAttrObserver = new MutationObserver(() => {
+        const prevLeft = cachedSafeArea?.left;
         refreshUiMetrics();
+        // A left overlay card opening/closing changes safeLeft; the ResizeObserver sees it too late.
+        if (currentLens === "geography" && !inRoadMode && !inSummaryMode && cachedSafeArea?.left !== prevLeft) {
+          applyGeographyCameraPose({ immediate: reducedMotion || !glideActive });
+        }
       });
-      for (const id of UI_EXCLUSION_IDS) {
+      for (const id of [...UI_EXCLUSION_IDS, "ask-panel", "search-results-panel"]) {
         const el = document.getElementById(id);
         if (el) {
           uiAttrObserver.observe(el, { attributes: true, attributeFilter: ["hidden"] });
