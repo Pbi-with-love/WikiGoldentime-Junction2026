@@ -9,6 +9,10 @@ Read both before writing a new spec.
 - **`spec-writer` / `researcher` = Claude subagents** (Opus / Haiku). Spec-writer writes `docs/specs/*`; researcher writes `docs/memory/research/*`.
 - **Antigravity (Argon) = design only** (`--agent antigravity`, rules in `GEMINI.md`). Writes a design handoff file; no code, no tests.
 - **Antigravity (Gemini 4 Hydrogen, effort medium) = everything else** (`--agent antigravity --model gemini-4-hydrogen-medium`; plain `--model hydrogen` ignores `--effort` and runs XHigh; model id verified with `agy models`, rules in `HYDROGEN.md`): code, tests, `playwright-cli`, integration.
+- **Codex = fallback when Antigravity quota is out (user-approved 2026-11-14)** (`--agent codex`, no `--model`: it uses the
+  default in `~/.codex/config.toml`, gpt-6-luna, medium). Same rules as a Hydrogen worker: the spec text must start
+  "Read HYDROGEN.md, then docs/specs/NNN-<slug>.md. Implement it." (Codex auto-reads `AGENTS.md`, not `HYDROGEN.md`, so name it).
+  Resume a quota-stopped Hydrogen task by dispatching Codex with the same spec in the same worktree.
 
 - **Claude implementation worker (user-approved 2026-11-14)** (`--agent claude --model claude-sonnet-5-5`): implements a spec when the
   orchestrator assigns it (e.g. to run beside a busy Hydrogen worker or when Antigravity quota is out). If you are such a
