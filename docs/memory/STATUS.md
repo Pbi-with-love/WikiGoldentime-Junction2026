@@ -14,7 +14,8 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
   Way B spike only after Way A works end to end, timebox half a day, one article first:
   system-versioned `chunk_vector`, old vectors inserted with real timestamps via
   `system_versioning_insert_history = 1`; report honestly whether the vector index is used or it
-  falls back to a scan (fine at ~1,000 vectors). LLM: Claude API key available.
+  falls back to a scan (fine at ~1,000 vectors). LLM: Claude API chosen, key not created yet
+  (needed before api-summary / api-ask; goes in a VPS `.env`, never in the repo).
 - Server data: dataset S + vectors on 3307; dataset M 50 articles / 31,848 versions on 3308.
   Not yet: DB merge, full dataset M, UMAP coordinates, images, chunks, summaries, LLM key.
 
