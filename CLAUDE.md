@@ -10,6 +10,11 @@ Read both before writing a new spec.
 - **Antigravity (Argon) = design only** (`--agent antigravity`, rules in `GEMINI.md`). Writes a design handoff file; no code, no tests.
 - **Antigravity (Gemini 4 Hydrogen, effort high) = everything else** (`--agent antigravity --model gemini-4-hydrogen-high`; plain `--model hydrogen` ignores `--effort` and runs XHigh, rules in `HYDROGEN.md`): code, tests, `playwright-cli`, integration.
 
+- **Claude implementation worker (user-approved 2026-11-14)** (`--agent claude --model claude-sonnet-5-5`): implements a spec when the
+  orchestrator assigns it (e.g. to run beside a busy Hydrogen worker or when Antigravity quota is out). If you are such a
+  worker (your prompt says "You are an Orca implementation worker"), you are NOT the orchestrator: follow `HYDROGEN.md` and the spec,
+  write code and tests, never edit `docs/memory/*`, report with `worker_done`.
+
 ## Workflow (sequential, one worker at a time)
 0. Topic/tech unclear -> orchestrator calls `researcher` first. (Subagents can't spawn subagents, so the orchestrator calls researcher, then spec-writer.)
 1. Delegate to `spec-writer` -> `docs/specs/NNN-<slug>.md` (from `docs/specs/TEMPLATE.md`). Review it, commit it.
