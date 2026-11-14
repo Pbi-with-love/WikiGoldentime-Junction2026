@@ -33,7 +33,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca re-registration as git repo: after 011 and 012 finish (may need the user in the Orca UI).
 - /api/summary for history-less articles verified 14:15 UTC (fi 714914, sv 8184377, en 12424302, + fi 115530,
   sv 18361, en 305738): all HTTP 200, history null, ghost_sections [], llm tldr + facts with source.
-  sections [] whenever words < 1500 or kept sections < 4 (spec 009 is_short rule, by design).
+  sections [] whenever words < 1500 or kept sections < 4 (spec 009 is_short rule). User 14:40 UTC: KEEP this rule.
 - Priority after 012 + 011: /api/summary real sections/section history/ghosts + pre-warm demo articles
   (009 already delivered these on the 50 history articles; after the M load, rerun pre-warm), then 013.
 
