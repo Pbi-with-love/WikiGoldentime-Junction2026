@@ -28,6 +28,18 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - topic-road: Talvitie winter road (`GET /api/topic-road` for Talvisota, Suomen sisällissota, Autonomian aika) with fi/sv/en ice lanes, compressed historical year markers, 3-card stack, era minimap | done | `src/api.js`, `src/mock/index.js`, `src/scene.js`, `src/ui.js`; `npm test` (`GET /api/topic-road` & `GET /api/road` pass in 11/11); Playwright Chromium check OK (`artifacts/screenshots/summary-trail/07-topic-history-preserved.png`)
 - summary-trail: single-article 3D Summary Trail (`GET /api/summary/{lang}/{page_id}`), primary **Summarize** entry on all articles, overview-only on short articles, camera-relative `CSS3DRenderer` depth trail + screen-space focused overlay, "Read more" Markdown, dashed ghost sections, wheel isolation, 2-stage `Esc`; removed old article-sections road & TOC minimap | done | `src/api.js`, `src/mock/road_stations.js`, `src/scene.js`, `src/ui.js`, `index.html`, `src/styles.css`; `npm test` (11/11 pass); `npm run build` OK; Playwright Chromium E2E (`0` console/page/request errors, `artifacts/screenshots/summary-trail/` 01–07)
 
+## Backend specs (run in this order, one worker at a time: 004/006/009/010 share src/api.js,
+## contract.test.js and backend/ app)
+- 002-db-merge | in progress (Hydrogen) |
+- 003-umap-coords | spec ready |
+- 004-mock-flags | spec ready |
+- 005-history-stats | spec ready (adds global_month_stats) |
+- 006-api-core | spec ready (wires article_image -> null until 007; loads ~/wikimemory/.env) |
+- 007-fetch-images | spec ready (adds license, artist columns) |
+- 008-chunks | spec ready (needs bge-m3 on the Mac with same digest as VPS 790764642607) |
+- 009-api-summary | spec ready |
+- 010-api-ask | spec ready (hero demo, Way A) |
+
 ## Backlog (proposed specs, in order)
 Phase 0 — groundwork
 - per-endpoint mock flags in src/api.js | todo |
