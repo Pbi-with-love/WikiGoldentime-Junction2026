@@ -1735,27 +1735,6 @@ a:focus-visible,
   white-space: nowrap;
 }
 
-.road-topic-switcher {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.road-topic-chip {
-  height: 30px;
-  padding: 0 9px;
-  background-color: rgba(22, 36, 63, 0.78);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.road-topic-chip.is-active {
-  border-color: var(--snow);
-  color: var(--snow);
-  font-weight: 600;
-}
-
 /* Projected historical years in large Literata numerals along the right edge of the road */
 .projected-road-year {
   position: absolute;

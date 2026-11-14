@@ -348,20 +348,6 @@ export function createUI({
     onExitRoad?.();
   });
 
-  document.querySelectorAll(".road-topic-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      if (chip.dataset.roadCategory) {
-        onEnterRoad?.({ category: chip.dataset.roadCategory, mode: "topic" });
-      } else if (chip.dataset.roadPage) {
-        onEnterRoad?.({
-          lang: chip.dataset.roadLang || "fi",
-          page_id: Number(chip.dataset.roadPage),
-          mode: chip.dataset.roadMode || "topic",
-        });
-      }
-    });
-  });
-
   function isQuestionQuery(q) {
     const lower = q.toLowerCase();
     return (
@@ -1361,7 +1347,6 @@ export function createUI({
     hoverLabel.hidden = true;
     if (skyLegend) skyLegend.hidden = true;
 
-    const art = roadData.article;
     const topicMeta = roadData.topic || {};
     const totalSections = roadData.stations.length;
     roadTopicTitle.textContent = topicMeta.title || art.title || "Talvisota";
@@ -1376,17 +1361,6 @@ export function createUI({
       roadTopicMeta.textContent = `${t("road.historicalMilestones", { count: totalSections })}${eraSpan}`;
     }
 
-    const activePageId = art.page_id ?? topicMeta.page_id;
-    document.querySelectorAll(".road-topic-chip").forEach((chip) => {
-      const matchesCategory =
-        Boolean(chip.dataset.roadCategory) && chip.dataset.roadCategory === topicMeta.category;
-      const matchesPage =
-        Boolean(chip.dataset.roadPage) &&
-        activePageId !== null &&
-        activePageId !== undefined &&
-        Number(chip.dataset.roadPage) === Number(activePageId);
-      chip.classList.toggle("is-active", matchesCategory || matchesPage);
-    });
 
     roadTopBar.hidden = false;
     roadCardsStage.hidden = false;
