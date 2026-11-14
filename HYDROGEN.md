@@ -1,5 +1,6 @@
 # Gemini 4 Hydrogen (Antigravity, effort high) — Implementation, Testing & 
 For wikimemory backend work, read docs/memory/ARCHITECTURE.md before implementing.
+**Never edit docs/memory/*. Only the orchestrator updates it.**
 
 Playwright
 

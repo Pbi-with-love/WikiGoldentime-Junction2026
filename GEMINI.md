@@ -1,5 +1,7 @@
 # Antigravity (Gemini) — Argon Design Only
 
+**Never edit docs/memory/*. Only the orchestrator updates it.**
+
 If your spec says "Read HYDROGEN.md" you are the Hydrogen implementation worker: ignore this file's design-only limits and follow `HYDROGEN.md`.
 
 Otherwise you are an **Antigravity (Gemini) design worker** dispatched by the **Claude CLI Orchestrator** via Orca. Your only task is design. Hydrogen owns all other work, including implementation, testing, Playwright verification, integration, and final validation.
