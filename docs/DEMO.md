@@ -10,39 +10,67 @@ system-versioned `wikihistory` table with 862,076 real revisions, read with
 `FOR SYSTEM_TIME AS OF`, shows what the article said in each year. Every LLM output is grounded in
 the text it was given and is cached in MariaDB, so the demo never waits for the model.
 
-## Demo script (about 3.5 minutes)
+## Demo script (about 4 minutes)
+
+Labels below are the real English button names (checked in a dry run, see
+`docs/memory/research/demo-dryrun.md`). Start in the **English** UI (`English` button, top right).
 
 1. **Galaxy (20 s).** Open the app. Say: "Each star is one article. Colour shows the language, and a
    red ring marks an article that had an edit war. Position comes from UMAP over the bge-m3 vectors."
-   Drag to orbit, then move the time slider (2003–2026 edit histogram).
-2. **Search (15 s).** Type `talvisota` and pick *Talvisota* (fi 1256). Say: "Search runs on MariaDB
-   vector search. The small dots show the same article in the other languages."
-3. **Ask, the hero question (60 s).** Open Ask and type `How did the Winter War end?` (or
-   `Miten talvisota päättyi?`). Say: "The answer cites its source sentences. Under it, 'This answer
-   changed N times' shows a timeline of milestones":
+   Drag to orbit, then move the time slider (2003–2026, "Edits per month").
+2. **Search (15 s).** Type `talvisota`, press **Search**, pick *Talvisota* (fi 1256). Say: "Search runs
+   on MariaDB vector search. The 'also in' chips show the same article in the other languages."
+3. **Ask, the hero question (60 s).** Type `How did the Winter War end?` (or the chip with the same
+   text) and press **Ask**. Say: "The answer cites its sources. Under it, 'This answer changed 3 times'
+   is a timeline of 4 milestones." Click the **2006–2008** milestone. Point at the line
+   **"Edited by Whiskey~fiwiki on 7 Nov 2006 · oldid=1862876"** (not the header oldid above it, which is
+   just the last edit of that period):
    - 2003: the peace treaty is signed on "13 March".
    - 2005: the article is rewritten (rev 590107).
-   - 2006: the text becomes "the evening of 12 March, in effect 13 March", **changed by** rev 1862876,
-     user Whiskey~fiwiki. We checked by hand that this is the one real date change. The 2004 flips and
-     the removals in 2005–2010 were vandalism, reverted within 1–2 minutes.
-   - 2009 (en) / 2011 (fi): new facts are added (105 days, 1721 comparison).
-   Say: "Each year's answer is built from `FOR SYSTEM_TIME AS OF` text, not from today's article."
-4. **Summarize (45 s).** Go back to the Talvisota star and click **Summarize**. Say: "One card per
-   section, 14 in all. Each fact keeps its exact source sentence (92 of 92 facts grounded on the three
-   demo articles). Each card shows that section's history. The dashed cards are **ghost sections**:
-   5 sections that existed in the past and were later removed."
-5. **Through time (40 s).** Open **Through time**. Pick a year, for example 2006, to read the article
-   AS OF that date. Then show the word diff between two revisions. Say: "This is a plain
+   - 2006: the text becomes "the evening of 12 March", **changed by** rev 1862876, user
+     Whiskey~fiwiki. We checked by hand that this is the one real date change. The 2004 flips and the
+     removals in 2005–2010 were vandalism, reverted within 1–2 minutes.
+   - 2009 (en question) / 2011 (fi question): new facts are added (105 days, 1721 comparison).
+   Click the `oldid=1862876` link to open that exact revision on Wikipedia. Say: "Each year's answer
+   is built from `FOR SYSTEM_TIME AS OF` text, not from today's article." Optional: switch to
+   **Suomi** and ask `Miten talvisota päättyi?`. The same 2006 edit appears ("Muokannut
+   Whiskey~fiwiki (7.11.2006)"). The milestones are identical in the fi, sv and en UI.
+4. **Summarize (45 s).** Switch the UI to **Suomi** first (the language buttons are hidden while a
+   summary is open). Open *Talvisota*, click **Tiivistä** (Summarize). Say: "One card per section,
+   14 in all. Each fact keeps its exact source sentence. The faded cards are **ghost sections**: 5
+   sections that existed in the past and were later removed." Use **Seuraava** (Next) to reach
+   section 5 *Moskovan rauha*. Point at "muokattu uudelleen 14 kertaa" (rewritten 14 times): that is
+   the section's own edit history, precomputed in SQL.
+5. **Cross-language compare (30 s).** On the same card, under the summary: "Myös ruotsinkielisessä
+   Wikipediassa" (Also in Swedish Wikipedia) with the matching Swedish passage, section
+   *Fredsavtalet*. Say: "For each Finnish section we look for the closest Swedish and English passage
+   with vector distance. A section with no close passage is marked 'Only in Finnish Wikipedia'."
+   Then tell the treaty story from our research (an observation, not a verdict):
+   - fi was corrected in 2006 (rev 1862876): signed "in the evening of 12 March", fighting ended the
+     next day.
+   - The sv and en **lead sentences** still put the end of the war / the treaty on 13 March 1940,
+     while their own body text says the treaty was signed on 12 March.
+   - All three agree on the facts in the body: signed 12 March, fighting ended 13 March at 11
+     (Helsinki time). Only fi says "evening".
+6. **Language (30 s).** Click **Back to the sky** (Takaisin taivaalle), switch to **Svenska**, open
+   *Talvisota* and click **Sammanfatta**. Say: "In Swedish we show the **native** Swedish article,
+   *Vinterkriget*, not a translation: 'Sammanfattning av artikeln i svenskspråkiga Wikipedia', 6
+   sections." Click **Nästa** to the card "Redigeringshistorik från finskspråkiga Wikipedia" (Edit
+   history of Finnish Wikipedia): the Finnish section history, with dots for "Även i svenskspråkiga /
+   engelskspråkiga Wikipedia" and "Bara i finskspråkiga Wikipedia". Then switch to **English**: the
+   native *Winter War* ("Summary of the English Wikipedia article", 12 sections). Say: "Native
+   article first. Articles without a Swedish or English sibling get a translation of the Finnish
+   summary, labelled 'Machine-translated from Finnish Wikipedia'."
+7. **Through time (40 s).** **Back to the sky**, open *Talvisota*, click the **Through Time** tab,
+   then **As of 2006**. The card shows "2006 · Edited by Höyhens on 29 Dec 2006 · oldid=2114325" and the
+   article text as of that date. Scroll to **Word diff against today**. Say: "This is a plain
    `SELECT ... FOR SYSTEM_TIME AS OF` on the system-versioned table, and each version links back to
    Wikipedia's `?oldid=`."
-6. **Edit wars (20 s).** In the same panel, show the monthly edits, reverts and disputes. Say:
-   "Talvisota has 2,143 versions, 328 reverts, 88 disputes and 7 edit-war months. Across dataset M
-   there are 45,668 reverts, 15,633 disputes and 890 edit-war months. All of it is precomputed in SQL
-   tables, never computed per request."
-7. **Language (15 s).** Switch the UI to `sv`, then `en`. Say: "The summaries and answers come back in
-   the reader's language. The cache is keyed by UI language."
-   (Do not run Ask with the Swedish question here. See Known limits.)
-8. **Close (15 s).** Say: "In short: vectors find the passage, system versioning shows how it changed,
+8. **Edit wars (20 s).** Top of the same tab: "2,143 versions · 328 reverts · 88 disputes · 7 edit-war
+   months", and the monthly bars (hover one for "edits, disputes"). Say: "Across dataset M there are
+   45,668 reverts, 15,633 disputes and 890 edit-war months. All of it is precomputed in SQL tables,
+   never computed per request."
+9. **Close (15 s).** Say: "In short: vectors find the passage, system versioning shows how it changed,
    and MariaDB stores all of it, including the LLM cache."
 
 Do not use demo questions 32, 34 or 39 from `data/demo-questions.tsv` (1-based). Their top article is
@@ -65,18 +93,27 @@ organizers' 37 test questions:
 Hybrid was slower and no better, so we do not use it. One question got worse with chunks
 (Ryti–Ribbentrop-sopimus).
 
+**Cross-language compare.** `GET /api/compare/fi/{page_id}` runs on request: for each Finnish section
+it takes the closest chunk of the Swedish and English sibling (same `wikidata_id`) with
+`VEC_DISTANCE_COSINE` between the two articles' chunks. A match needs distance ≤ 0.35. On 132
+hand-labelled pairs that gives precision 0.908 and recall 0.747. Talvisota takes 17 ms.
+
 **System versioning (SVT).** `wikihistory.article` is `WITH SYSTEM VERSIONING`. Its invisible
 `row_start`/`row_end` columns hold the real Wikipedia edit times. We loaded dataset M (19,742
 articles, 862,076 versions) with the organizers' loader, using `system_versioning_insert_history`.
-- Through time, Ask and section history read `FOR SYSTEM_TIME AS OF TIMESTAMP ?` (one snapshot per
-  year). Timelines read `FOR SYSTEM_TIME ALL`.
+- Through time and Ask read `FOR SYSTEM_TIME AS OF TIMESTAMP ?` (one snapshot per year). Timelines
+  read `FOR SYSTEM_TIME ALL`.
 - Precomputed tables: `history_stats` (versions, reverts, disputes, war months per article),
   `month_stats` (371,512 rows) and `global_month_stats` (285 rows). Rebuilding them took 79 s.
+- `section_history`: section history and ghost sections for all 19,285 Finnish pages, built once
+  from the yearly SVT snapshots, with no LLM. A summary reads it in under 1 ms.
 - We merged `wikihistory` into the same server as `wikirag`. This lets **one SQL statement** join
   vector search with `FOR SYSTEM_TIME AS OF` (`SINGLE_STMT_HISTORY_SQL` in `backend/ask.py`).
 
-**Caches in MariaDB.** `summary_cache` and `answer_cache` hold the LLM's JSON output, keyed by
-article revision or question plus the `ui` language. A cache hit takes about 2–7 ms.
+**Caches in MariaDB.** `summary_cache` and `answer_cache` hold the LLM's JSON output. The default row
+is built once; each UI language row is a translation of it, never a rebuild, so all languages show
+the same milestones. Each translated row stores a `source_hash` of the default JSON; if the default
+changes, the hash no longer matches and the row is translated again. A cache hit takes about 2–7 ms.
 
 ## What we learned
 
@@ -97,20 +134,20 @@ SYSTEM VERSIONING` table on MariaDB 12.3.3, filling it with `system_versioning_i
 every year and counted each new answer as a change. As a result, rewording looked like a change, and
 the real treaty-date edit was placed one period late. Now a milestone needs a change in the numbers
 (dates, counts) in the cited source sentences, and we name the revision and the user who made it.
-The limit: a change that touches only names, with no number, is not detected.
 
 ## Known limits
 
 - Change detection uses numbers only. Edits that change only names or wording are missed.
-- History exists only for Finnish (dataset M). For sv/en articles there is no time view, so their
-  answers map to the Finnish sibling article. 12 listed articles were missing from the dumps.
+- Compare recall is 0.747: about 1 in 4 real matches is missed (e.g. Talvisota *Joukot* vs Swedish
+  *Styrkeförhållanden*, 0.381). Some matches are only cosmetic (the fi notes section "Huomautuksia"
+  matches an English notes chunk), and a match can point to a weak passage (fi *Moskovan rauha* ->
+  en *Foreign support*).
+- History exists only for Finnish (dataset M). Swedish and English summaries show the **Finnish**
+  edit history next to them. 12 listed articles were missing from the dumps.
 - Some demo questions miss: 32, 34 and 39 retrieve the wrong top article, and [38] finds no answer at all.
-- Until spec 015 lands, answers in the sv/en UI (`?ui=`) are rebuilt separately and can show a different
-  timeline (e.g. the 2006 milestone points to another revision). Demo the timeline in the Finnish UI, or
-  after 015.
 - Hybrid search is measured but not used. Way B is a research table only.
 - Short articles (under 1,500 words or fewer than 4 sections) get an overview without section cards.
-- Image license/artist credit is not yet shown in the UI.
+- Image license/artist credit is shown only once spec 019 Part B is deployed.
 
 ## Run
 
