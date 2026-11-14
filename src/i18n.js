@@ -959,6 +959,67 @@ export function normalizeViewState(raw) {
   const category =
     typeof raw.category === "string" && raw.category.trim() ? raw.category.trim() : null;
 
+  const sanitizeCardRef = (ref) => {
+    if (!ref || typeof ref !== "object" || Array.isArray(ref)) return null;
+    const validKinds = new Set(["overview", "section", "ghost", "fiHistory"]);
+    if (!validKinds.has(ref.kind)) return null;
+    const isInt0 = (v) => Number.isInteger(v) && v >= 0;
+
+    let articleLang = null;
+    if (ref.articleLang != null) {
+      if (!VALID_ARTICLE_LANGS.has(ref.articleLang)) return null;
+      articleLang = ref.articleLang;
+    }
+    let articlePageId = null;
+    if (ref.articlePageId != null) {
+      if (!isInt0(ref.articlePageId)) return null;
+      articlePageId = ref.articlePageId;
+    }
+    let totalSections = 0;
+    if (ref.totalSections !== undefined) {
+      if (!isInt0(ref.totalSections)) return null;
+      totalSections = ref.totalSections;
+    }
+
+    const base = { kind: ref.kind, articleLang, articlePageId, totalSections };
+    if (ref.kind === "overview" || ref.kind === "fiHistory") {
+      return base;
+    }
+    if (ref.kind === "section") {
+      if (!isInt0(ref.no) || typeof ref.heading !== "string") return null;
+      let pos = Math.max(0, ref.no - 1);
+      if (ref.pos !== undefined) {
+        if (!isInt0(ref.pos)) return null;
+        pos = ref.pos;
+      }
+      return {
+        ...base,
+        no: ref.no,
+        heading: ref.heading.slice(0, 200),
+        pos,
+      };
+    }
+    if (ref.kind === "ghost") {
+      if (!isInt0(ref.afterNo) || !isInt0(ref.fromYear) || typeof ref.heading !== "string") {
+        return null;
+      }
+      let oldid = null;
+      if (ref.oldid != null) {
+        if (!isInt0(ref.oldid)) return null;
+        oldid = ref.oldid;
+      }
+      return {
+        ...base,
+        afterNo: ref.afterNo,
+        fromYear: ref.fromYear,
+        oldid,
+        heading: ref.heading.slice(0, 200),
+        fromFi: Boolean(ref.fromFi),
+      };
+    }
+    return null;
+  };
+
   if (view === "panel" && !article) return null;
   if (view === "summary" && !article) return null;
   if (view === "road" && !article && !category) return null;
@@ -970,6 +1031,7 @@ export function normalizeViewState(raw) {
     year,
     article,
     cardIndex: sanitizeNonNegInt(raw.cardIndex, 0),
+    cardRef: view === "summary" ? sanitizeCardRef(raw.cardRef) : null,
     readMoreOpen: Boolean(raw.readMoreOpen),
     stationIndex: sanitizeNonNegInt(raw.stationIndex, 0),
     category,
