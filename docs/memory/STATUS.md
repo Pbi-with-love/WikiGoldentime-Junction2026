@@ -45,8 +45,7 @@ Next steps, in order (user's plan):
    Hard deadline Sun 15 Nov 19:00 UTC.
 4. Dispatch spec 012 (ask milestones fix) — rebuild answer_cache only after step 1. Then spec 013
    (i18n fi/sv/en, UI language + ?ui= for summary/ask; language only, no ARIA/keyboard):
-   Argon design step first, runs after 012 (both edit backend/ask.py). 013 spec was being written
-   at handoff — check docs/specs/013-i18n.md exists; if not, re-run spec-writer.
+   Argon design step first, runs after 012 (both edit backend/ask.py). docs/specs/013-i18n.md is written.
 5. Dataset M full load: after `dl` finishes, ASK the user before loading (hours; 3308 is used by
    the organizers' :8001), then rerun `scripts/db_merge.sh merge` and `history_stats.py`.
 Verified finding (Moscow treaty, hero question): treaty date really changed once, rev 1862876
@@ -78,7 +77,7 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 - 009-api-summary | done | /api/summary real (MOCK.summary=false); claude-haiku-5-5, facts carry verbatim source sentence (92/92 grounded on fi 1256/1150/440); summary_cache pre-warmed; cache hit ~3-7 ms, miss = extractive + background LLM; Talvisota: 14 sections, 5 ghost sections; contract REAL=summary 11/11, mock 11/11 (orchestrator rerun); Playwright `artifacts/screenshots/009-api-summary/` |
 - 010-api-ask | done | /api/ask real (MOCK.ask=false); hero 'How did the Winter War end?' -> top fi 1256 via en/sv->fi sibling, history_available, 5 milestones (signing date drifts '13 March' -> 'evening of 12 March, in effect 13 March'); cache hit 4 ms on VPS; 25/25 pytest, contract REAL=ask 11/11; answer_cache pre-warm of data/demo-questions.tsv (40) continues in tmux answers. Follow-ups: diff rejects 4-digit rev_id (oldid=6110 -> 404, _REV_ID_RE in main.py); re-run build_answers after full chunk embed |
 - 012-ask-milestones | spec ready (fix: count only Finnish source-sentence changes, changed_by = real introducing rev; hero test pins rev 1862876) |
-- 013-i18n | spec being written at handoff (UI spec: Argon first; after 012) |
+- 013-i18n | spec ready (UI spec: Argon design first, Hydrogen only after 012 is done; src/i18n.js, ?ui= on summary/ask, ui column in summary_cache/answer_cache; written in parallel with 012 — check its milestone-rendering assumption against 012) |
 - 011-wayb-spike | spec ready (gate: 010 done; half a day; findings -> docs/memory/research/wayb-spike.md) |
 
 ## Backlog (proposed specs, in order)
