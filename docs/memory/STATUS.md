@@ -37,6 +37,10 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
   project in the Orca UI and re-add it as git before the next parallel run.
 
+## 18:42 UTC — frontend redeployed
+- VPS dist/ was stale since 12:13 (no worker deployed the frontend for 013–019; they tested with local vite).
+  Rebuilt and rsynced: assets index-B7Rrqhmc.js / index-wcKiAZqL.css. Deploy step now in ARCHITECTURE.md.
+
 ## User decisions 16:40 UTC (016)
 - article.wikidata_id index approved (worker found it already exists).
 - fi_history must not depend on the summary cache: 016 builds history+ghosts (SVT, no LLM) in the

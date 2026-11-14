@@ -40,6 +40,10 @@ offers related articles to keep reading. Judges are the authors of the organizer
 - Every service binds to 127.0.0.1; access through SSH tunnel. Docker ignores ufw: publish ports as
   "127.0.0.1:PORT:3306". Long jobs: `tmux new -d -s NAME 'command'`.
 - Backend target: FastAPI on 127.0.0.1:8002, also serving the frontend build (`dist/`).
+  **Frontend deploy (every spec that changes src/, index.html or styles):** `npm run build` locally, then
+  `rsync -az --delete -e "ssh -i ~/.ssh/id_serverTech -o IdentitiesOnly=yes" dist/ root@72.61.20.120:/root/wikimemory/dist/`
+  (no api restart needed). Check `curl -s http://127.0.0.1:8002/ | grep assets/index-` on the VPS shows the new hash.
+  Layout: frontend at the repo root (index.html, src/, vite.config.js -> dist/), backend in backend/ + scripts/.
 
 ## Schemas
 wikirag (dataset S, current text):
