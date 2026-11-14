@@ -4,7 +4,7 @@
 // (e.g. `REAL=<key> API_BASE=http://127.0.0.1:8002 npm test`).
 
 export const MOCK = {
-  stars: true, search: true, article: true, timeline: true, asof: true, diff: true,
+  stars: false, search: false, article: false, timeline: false, asof: false, diff: false,
   summary: true, ask: true, threads: true, road: true, "topic-road": true,
 };
 

@@ -6,7 +6,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Frontend: done on mock data (galaxy, search, Summarize 3D cards, Through time, Ask with history,
   memory threads, topic road with 3 fixed mock topics). Evidence: contract test 11 passed,
   `vite build` OK, Playwright E2E in Chromium with no console errors.
-- Backend: specs 002-db-merge, 003-umap-coords written. Dataset M stays at 50 articles for now
+- Backend: FastAPI live on VPS :8002 (spec 006); core endpoints real. Dataset M stays at 50 articles for now
   (build/test history code on 50, rerun history-stats after the full load).
 - Decisions (2026-11-14): hero demo = Ask a question, see how Wikipedia's answer changed over the
   years (Way A: current vectors find articles, answer from `FOR SYSTEM_TIME AS OF` text per year,
@@ -34,10 +34,10 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 003-umap-coords | done | article_coord 29,460 rows (fi 19,285 / sv 4,921 / en 5,254), 0 missing (orchestrator recount); UMAP 45–84 s wall, 1.16 GB RSS, deterministic across 2 runs; :8000/:8001 200 |
 - 004-mock-flags | done | `MOCK` object (11 keys) + REAL/API_BASE in contract test; npm test 11/11 (orchestrator rerun), build OK, REAL=stars vs closed port fails as expected, Playwright smoke 0 errors (`artifacts/screenshots/004-mock-flags/`) |
 - 005-history-stats | done | history_stats 50 / month_stats 5,331 / global_month_stats 279 rows, edits sum 31,848 (orchestrator recount); Talvisota 2143 versions, 328 reverts, 88 disputes, 7 war months = organizers' numbers; 6 unit tests; run 1.4 s, deterministic CHECKSUM |
-- 006-api-core | in progress (Hydrogen) (wires article_image -> null until 007; loads ~/wikimemory/.env) |
+- 006-api-core | done | FastAPI on VPS 127.0.0.1:8002 (tmux api); orchestrator rerun: REAL=stars,search,article,timeline,asof,diff contract 10 pass/0 fail/1 skip (error-mode), mock 11/11; curl via tunnel: stars 0.32 s gz 1.7 MB, search 0.46 s, article 0.16 s, timeline 0.18 s, asof 0.18 s, diff 0.17 s; 6 MOCK flags now false; vite.config.js proxies /api to :8002; contract edits: top-2 gap <0.02, asof date 2026-10-01 |
 - 007-fetch-images | spec ready (adds license, artist columns) |
 - 008-chunks | spec ready (embed on VPS overnight, tmux embed, nice) |
-- 009-api-summary | spec ready |
+- 009-api-summary | in progress (Hydrogen) |
 - 010-api-ask | spec ready (hero demo, Way A) |
 - 011-wayb-spike | spec ready (gate: 010 done; half a day; findings -> docs/memory/research/wayb-spike.md) |
 

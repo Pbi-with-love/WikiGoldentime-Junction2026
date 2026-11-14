@@ -1,0 +1,6 @@
+fastapi==0.162.7
+uvicorn==0.54.0
+mariadb==1.1.15
+requests==2.34.2
+httpx==0.28.1
+pytest==9.2.0
