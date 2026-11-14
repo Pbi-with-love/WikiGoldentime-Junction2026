@@ -330,15 +330,19 @@ CREATE TABLE IF NOT EXISTS wikirag.summary_cache (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
-HISTORY_CACHE_DDL = """
-CREATE TABLE IF NOT EXISTS wikirag.history_cache (
-    lang VARCHAR(3) NOT NULL,
+SECTION_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS wikihistory.section_history (
     page_id INT UNSIGNED NOT NULL,
     rev_id BIGINT UNSIGNED NOT NULL,
+    svt_rev_id BIGINT UNSIGNED NOT NULL,
+    end_year SMALLINT UNSIGNED NOT NULL,
+    sections SMALLINT UNSIGNED NOT NULL,
+    ghosts TINYINT UNSIGNED NOT NULL,
     json LONGTEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (lang, page_id, rev_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    build_ms INT UNSIGNED NOT NULL,
+    built_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (page_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 """
 
 ARTICLE_SQL = """
@@ -375,16 +379,24 @@ VALUES (?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE source_hash = VALUES(source_hash), json = VALUES(json), created_at = CURRENT_TIMESTAMP
 """
 
-HISTORY_CACHE_GET_SQL = """
-SELECT json
-FROM wikirag.history_cache
-WHERE lang = ? AND page_id = ? AND rev_id = ?
+SECTION_HISTORY_GET_SQL = """
+SELECT a.rev_id, h.json
+FROM wikihistory.article a
+LEFT JOIN wikihistory.section_history h
+  ON h.page_id = a.page_id AND h.rev_id = ? AND h.svt_rev_id = a.rev_id
+ AND h.end_year >= YEAR(UTC_TIMESTAMP())
+WHERE a.page_id = ?
 """
 
-HISTORY_CACHE_PUT_SQL = """
-INSERT INTO wikirag.history_cache (lang, page_id, rev_id, json)
-VALUES (?, ?, ?, ?)
-ON DUPLICATE KEY UPDATE json = VALUES(json), created_at = CURRENT_TIMESTAMP
+SECTION_HISTORY_HAS_ARTICLE_SQL = "SELECT rev_id FROM wikihistory.article WHERE page_id = ?"
+
+SECTION_HISTORY_PUT_SQL = """
+INSERT INTO wikihistory.section_history
+    (page_id, rev_id, svt_rev_id, end_year, sections, ghosts, json, build_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE rev_id = VALUES(rev_id), svt_rev_id = VALUES(svt_rev_id),
+    end_year = VALUES(end_year), sections = VALUES(sections), ghosts = VALUES(ghosts),
+    json = VALUES(json), build_ms = VALUES(build_ms), built_at = CURRENT_TIMESTAMP
 """
 
 SVT_CURRENT_ROW_SQL = """
@@ -405,6 +417,7 @@ SVT_WAR_YEARS_SQL = (
 
 _table_lock = threading.Lock()
 _cache_table_ready = False
+_section_history_table_ready = False
 
 _inflight_lock = threading.Lock()
 _inflight_jobs: set[tuple[str, int, int, str]] = set()
@@ -460,11 +473,33 @@ def ensure_cache_table(con: mariadb.Connection | None = None) -> None:
             cur = conn.cursor()
             try:
                 cur.execute(SUMMARY_CACHE_DDL)
-                cur.execute(HISTORY_CACHE_DDL)
                 conn.commit()
             finally:
                 cur.close()
             _cache_table_ready = True
+        finally:
+            if own_con:
+                conn.close()
+
+
+def ensure_section_history_table(con: mariadb.Connection | None = None) -> None:
+    """Create wikihistory.section_history once per process (build script and writers, not readers)."""
+    global _section_history_table_ready
+    if _section_history_table_ready:
+        return
+    with _table_lock:
+        if _section_history_table_ready:
+            return
+        own_con = con is None
+        conn = _open_rag() if own_con else con
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(SECTION_HISTORY_DDL)
+                conn.commit()
+            finally:
+                cur.close()
+            _section_history_table_ready = True
         finally:
             if own_con:
                 conn.close()
@@ -647,6 +682,11 @@ def _truncate_word_boundary(text: str, max_chars: int = GHOST_TEXT_MAX_CHARS) ->
 
 def _clean_section_key(blocks: list[tuple[str, str]]) -> str:
     return "\n".join(f"{kind}:{text}" for kind, text in blocks)
+
+
+def _is_short(words: int, kept_sections: list[dict[str, Any]]) -> bool:
+    """009 rule: short articles get no section cards, history or ghosts."""
+    return words < 1500 or len(kept_sections) < 4
 
 
 def compute_history_and_ghosts(
@@ -853,6 +893,131 @@ def _fetch_svt_history_and_ghosts(
     )
 
 
+def compute_section_history(
+    article_row: dict[str, Any],
+    svt_cur: mariadb.Cursor,
+    svt_row: dict[str, Any],
+) -> dict[str, Any]:
+    """The section history result for one fi article (old SVT path; no LLM)."""
+    text = str(article_row["text"])
+    _, kept_sections, all_h2_keys = split_markdown_sections(text)
+    if _is_short(count_words(text), kept_sections):
+        return {"sections": [], "ghost_sections": []}
+    hist_by_no, ghosts = _fetch_svt_history_and_ghosts(
+        svt_cur=svt_cur,
+        page_id=int(article_row["page_id"]),
+        current_svt_row=svt_row,
+        current_sections=kept_sections,
+        all_current_headings=all_h2_keys,
+    )
+    return {
+        "sections": [
+            {"no": sec["no"], "heading": sec["heading"], "history": hist_by_no[sec["no"]]}
+            for sec in kept_sections
+        ],
+        "ghost_sections": ghosts,
+    }
+
+
+def history_by_no(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    return {int(s["no"]): s["history"] for s in result["sections"]}
+
+
+def read_section_history(
+    cur: mariadb.Cursor, page_id: int, rev_id: int
+) -> tuple[bool, dict[str, Any] | None]:
+    """One indexed SELECT: (has_history, fresh result or None when missing/stale)."""
+    try:
+        cur.execute(SECTION_HISTORY_GET_SQL, (rev_id, page_id))
+        row = cur.fetchone()
+        if row is None:
+            return False, None
+        return True, (json.loads(row[1]) if row[1] is not None else None)
+    except mariadb.ProgrammingError:  # table not created yet: treat as missing
+        cur.execute(SECTION_HISTORY_HAS_ARTICLE_SQL, (page_id,))
+        return cur.fetchone() is not None, None
+
+
+def build_section_history_row(
+    page_id: int,
+    rag_opener: Callable[[], mariadb.Connection] | None = None,
+    svt_opener: Callable[[], mariadb.Connection] | None = None,
+) -> dict[str, Any] | None:
+    """Compute (old SVT path), upsert wikihistory.section_history, return the result.
+
+    None when the fi article or its current SVT row does not exist.
+    """
+    open_rag = rag_opener or _open_rag
+    open_svt = svt_opener or _open_svt
+    t0 = time.monotonic()
+    rag_con = open_rag()
+    try:
+        cur = rag_con.cursor()
+        try:
+            cur.execute(ARTICLE_SQL, ("fi", page_id))
+            fetched = cur.fetchone()
+            if fetched is None:
+                return None
+            article_row = dict(zip([d[0] for d in cur.description], fetched))
+        finally:
+            cur.close()
+
+        svt_con = open_svt()
+        try:
+            svt_cur = svt_con.cursor()
+            try:
+                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
+                if not found:
+                    return None
+                svt_row = found[0]
+                result = compute_section_history(article_row, svt_cur, svt_row)
+            finally:
+                svt_cur.close()
+        finally:
+            svt_con.close()
+
+        end_year = max(datetime.now(timezone.utc).year, _parse_year(svt_row["row_start"]))
+        ensure_section_history_table(rag_con)
+        wcur = rag_con.cursor()
+        try:
+            wcur.execute(
+                SECTION_HISTORY_PUT_SQL,
+                (
+                    page_id,
+                    int(article_row["rev_id"]),
+                    int(svt_row["rev_id"]),
+                    end_year,
+                    len(result["sections"]),
+                    len(result["ghost_sections"]),
+                    json.dumps(result, separators=(",", ":"), ensure_ascii=False),
+                    int((time.monotonic() - t0) * 1000),
+                ),
+            )
+            rag_con.commit()
+        finally:
+            wcur.close()
+        return result
+    finally:
+        rag_con.close()
+
+
+def _precomputed_history(
+    has_history: bool,
+    result: dict[str, Any] | None,
+    page_id: int,
+    rag_opener: Callable[[], mariadb.Connection] | None = None,
+    svt_opener: Callable[[], mariadb.Connection] | None = None,
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]] | None:
+    """Fresh row -> its data; missing/stale -> rebuild synchronously via the old SVT path."""
+    if not has_history:
+        return None
+    if result is None:
+        result = build_section_history_row(page_id, rag_opener, svt_opener)
+    if result is None:
+        return None
+    return history_by_no(result), result["ghost_sections"]
+
+
 def _call_llm_json(
     client: Any,
     model: str,
@@ -945,7 +1110,7 @@ def build_summary_payload(
     article_words = count_words(text)
 
     lead, kept_sections, all_h2_keys = split_markdown_sections(text)
-    is_short = (article_words < 1500) or (len(kept_sections) < 4)
+    is_short = _is_short(article_words, kept_sections)
 
     article_meta = {
         "lang": lang,
@@ -1161,19 +1326,6 @@ def _fi_history_from_sections_and_ghosts(
     }
 
 
-def _fi_history_from_default_payload(
-    fi_meta: dict[str, Any],
-    fi_payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    sections_with_hist = [
-        {"no": s["no"], "heading": s["heading"], "history": s["history"]}
-        for s in fi_payload.get("sections", [])
-        if s.get("history") is not None
-    ]
-    ghosts = list(fi_payload.get("ghost_sections", []))
-    return _fi_history_from_sections_and_ghosts(fi_meta, sections_with_hist, ghosts)
-
-
 def _default_payload_history_status(payload: dict[str, Any]) -> str:
     art = payload.get("article") or {}
     if art.get("lang") == "fi" and (
@@ -1249,79 +1401,6 @@ def _apply_summary_translations(
     return out
 
 
-def build_and_cache_fi_history(
-    page_id: int,
-    rag_opener: Callable[[], mariadb.Connection] | None = None,
-    svt_opener: Callable[[], mariadb.Connection] | None = None,
-) -> dict[str, Any] | None:
-    """Compute section history and ghost sections from SVT (no LLM) and store in wikirag.history_cache."""
-    open_rag = rag_opener or _open_rag
-    open_svt = svt_opener or _open_svt
-
-    rag_con = open_rag()
-    try:
-        ensure_cache_table(rag_con)
-        cur = rag_con.cursor()
-        try:
-            cur.execute(ARTICLE_SQL, ("fi", page_id))
-            fetched = cur.fetchone()
-            if fetched is None:
-                return None
-            cols = [d[0] for d in cur.description]
-            fi_article = dict(zip(cols, fetched))
-        finally:
-            cur.close()
-    finally:
-        rag_con.close()
-
-    rev_id = int(fi_article["rev_id"])
-    text = str(fi_article["text"])
-    article_words = count_words(text)
-    _, kept_sections, all_h2_keys = split_markdown_sections(text)
-    is_short = (article_words < 1500) or (len(kept_sections) < 4)
-
-    sections_with_hist: list[dict[str, Any]] = []
-    ghosts_out: list[dict[str, Any]] = []
-    if not is_short:
-        svt_con = open_svt()
-        try:
-            svt_cur = svt_con.cursor()
-            try:
-                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
-                if found:
-                    history_by_no, ghosts_out = _fetch_svt_history_and_ghosts(
-                        svt_cur=svt_cur,
-                        page_id=page_id,
-                        current_svt_row=found[0],
-                        current_sections=kept_sections,
-                        all_current_headings=all_h2_keys,
-                    )
-                    sections_with_hist = [
-                        {"no": sec["no"], "heading": sec["heading"], "history": history_by_no[sec["no"]]}
-                        for sec in kept_sections
-                        if history_by_no.get(sec["no"]) is not None
-                    ]
-            finally:
-                svt_cur.close()
-        finally:
-            svt_con.close()
-
-    cached_obj = {"sections": sections_with_hist, "ghost_sections": ghosts_out}
-    serialized = json.dumps(cached_obj, separators=(",", ":"), ensure_ascii=False)
-    rag_write = open_rag()
-    try:
-        ensure_cache_table(rag_write)
-        wcur = rag_write.cursor()
-        try:
-            wcur.execute(HISTORY_CACHE_PUT_SQL, ("fi", page_id, rev_id, serialized))
-            rag_write.commit()
-        finally:
-            wcur.close()
-    finally:
-        rag_write.close()
-    return _fi_history_from_sections_and_ghosts(fi_article, sections_with_hist, ghosts_out)
-
-
 def _background_history_worker(
     key: tuple[str, int, int, str],
     rag_opener: Callable[[], mariadb.Connection] | None = None,
@@ -1329,7 +1408,7 @@ def _background_history_worker(
 ) -> None:
     _, page_id, rev_id, _ = key
     try:
-        build_and_cache_fi_history(page_id, rag_opener=rag_opener, svt_opener=svt_opener)
+        build_section_history_row(page_id, rag_opener=rag_opener, svt_opener=svt_opener)
     except Exception:
         logger.exception("Background SVT history job failed for fi:%s@%s", page_id, rev_id)
     finally:
@@ -1337,34 +1416,22 @@ def _background_history_worker(
             _inflight_jobs.discard(key)
 
 
-def _fetch_article_and_svt_row(
+def _fetch_article_and_history(
     rag_cur: mariadb.Cursor,
     lang: str,
     page_id: int,
 ) -> tuple[dict[str, Any], bool, dict[str, Any] | None]:
+    """Article row + (has_history, fresh section history result or None)."""
     rag_cur.execute(ARTICLE_SQL, (lang, page_id))
     fetched = rag_cur.fetchone()
     if fetched is None:
         raise HTTPException(status_code=404, detail=f"Article {lang}:{page_id} not found")
     cols = [d[0] for d in rag_cur.description]
     article_row = dict(zip(cols, fetched))
-
-    has_history = False
-    svt_row = None
-    if lang == "fi":
-        svt_con = _open_svt()
-        try:
-            svt_cur = svt_con.cursor()
-            try:
-                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
-                if found:
-                    has_history = True
-                    svt_row = found[0]
-            finally:
-                svt_cur.close()
-        finally:
-            svt_con.close()
-    return article_row, has_history, svt_row
+    if lang != "fi":
+        return article_row, False, None
+    has_history, result = read_section_history(rag_cur, page_id, int(article_row["rev_id"]))
+    return article_row, has_history, result
 
 
 def build_and_cache_llm_summary(
@@ -1518,7 +1585,7 @@ def build_and_cache_llm_summary(
     try:
         rag_cur = rag_con.cursor()
         try:
-            article_row, has_history, svt_row = _fetch_article_and_svt_row(rag_cur, lang, page_id)
+            article_row, has_history, hist_result = _fetch_article_and_history(rag_cur, lang, page_id)
             rev_id = int(article_row["rev_id"])
 
             if not force:
@@ -1536,25 +1603,14 @@ def build_and_cache_llm_summary(
     finally:
         rag_con.close()
 
-    svt_con = _open_svt() if has_history else None
-    try:
-        svt_cur = svt_con.cursor() if svt_con is not None else None
-        try:
-            payload, stats = build_summary_payload(
-                article_row=article_row,
-                has_history=has_history,
-                current_svt_row=svt_row,
-                svt_cur=svt_cur,
-                use_llm=True,
-                llm_client=llm_client,
-                model=model,
-            )
-        finally:
-            if svt_cur is not None:
-                svt_cur.close()
-    finally:
-        if svt_con is not None:
-            svt_con.close()
+    payload, stats = build_summary_payload(
+        article_row=article_row,
+        has_history=has_history,
+        use_llm=True,
+        llm_client=llm_client,
+        model=model,
+        precomputed_history=_precomputed_history(has_history, hist_result, page_id),
+    )
 
     if stats.total_calls > 0 and stats.failed_calls == stats.total_calls:
         logger.error(
@@ -1641,10 +1697,10 @@ def get_summary_response(
     cache_ui = resolve_cache_ui(ui, lang)
 
     open_rag = rag_opener or _open_rag
-    open_svt = svt_opener or _open_svt
 
     if not cache_ui:
         default_cached_json: str | None = None
+        has_history, hist_result = False, None
         rag_con = open_rag()
         try:
             ensure_cache_table(rag_con)
@@ -1662,36 +1718,21 @@ def get_summary_response(
                 cached = rag_cur.fetchone()
                 if cached is not None:
                     return Response(content=cached[0], media_type="application/json")
+                if lang == "fi":
+                    has_history, hist_result = read_section_history(rag_cur, page_id, rev_id)
             finally:
                 rag_cur.close()
         finally:
             rag_con.close()
 
-        has_history = False
-        svt_row = None
-        svt_con = None
-        svt_cur = None
-        try:
-            if lang == "fi":
-                svt_con = open_svt()
-                svt_cur = svt_con.cursor()
-                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
-                if found:
-                    has_history = True
-                    svt_row = found[0]
-
-            payload, _ = build_summary_payload(
-                article_row=article_row,
-                has_history=has_history,
-                current_svt_row=svt_row,
-                svt_cur=svt_cur,
-                use_llm=False,
-            )
-        finally:
-            if svt_cur is not None:
-                svt_cur.close()
-            if svt_con is not None:
-                svt_con.close()
+        payload, _ = build_summary_payload(
+            article_row=article_row,
+            has_history=has_history,
+            use_llm=False,
+            precomputed_history=_precomputed_history(
+                has_history, hist_result, page_id, rag_opener, svt_opener
+            ),
+        )
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
         if _summary_llm_enabled():
@@ -1708,8 +1749,12 @@ def get_summary_response(
     native_cached_json: str | None = None
     native_full_row: dict[str, Any] | None = None
     fi_meta: dict[str, Any] | None = None
-    fi_history_cache_json: str | None = None
-    fi_default_cache_json: str | None = None
+    fi_has_history = False
+    fi_hist_result: dict[str, Any] | None = None
+    native_has_history = False
+    native_hist_result: dict[str, Any] | None = None
+    fallback_has_history = False
+    fallback_hist_result: dict[str, Any] | None = None
 
     ui_cached_row: tuple[Any, Any, Any] | None = None
     default_cached_json = None
@@ -1741,6 +1786,10 @@ def get_summary_response(
                     if s_fetched is not None:
                         scols = [d[0] for d in rag_cur.description]
                         native_full_row = dict(zip(scols, s_fetched))
+                        if cache_ui == "fi":
+                            native_has_history, native_hist_result = read_section_history(
+                                rag_cur, s_pid, s_rev_id
+                            )
 
                 if cache_ui != "fi":
                     if lang == "fi":
@@ -1749,16 +1798,9 @@ def get_summary_response(
                         fi_meta = _fetch_sibling_meta(rag_cur, "fi", article_row.get("wikidata_id"))
                     if fi_meta is not None:
                         fi_pid = int(fi_meta["page_id"])
-                        fi_rev_id = int(fi_meta["rev_id"])
-                        rag_cur.execute(HISTORY_CACHE_GET_SQL, ("fi", fi_pid, fi_rev_id))
-                        h_cached = rag_cur.fetchone()
-                        if h_cached is not None:
-                            fi_history_cache_json = h_cached[0]
-                        else:
-                            rag_cur.execute(CACHE_GET_SQL, ("fi", fi_pid, fi_rev_id, ""))
-                            fi_def_cached = rag_cur.fetchone()
-                            if fi_def_cached is not None:
-                                fi_default_cache_json = fi_def_cached[0]
+                        fi_has_history, fi_hist_result = read_section_history(
+                            rag_cur, fi_pid, int(fi_meta["rev_id"])
+                        )
             else:
                 rag_cur.execute(CACHE_GET_UI_WITH_DEFAULT_SQL, (lang, page_id, rev_id, cache_ui))
                 ui_cached_row = rag_cur.fetchone()
@@ -1772,6 +1814,10 @@ def get_summary_response(
                     fallback_row = rag_cur.fetchone()
                     if fallback_row is not None:
                         default_cached_json = fallback_row[0]
+                if default_cached_json is None and lang == "fi":
+                    fallback_has_history, fallback_hist_result = read_section_history(
+                        rag_cur, page_id, rev_id
+                    )
         finally:
             rag_cur.close()
     finally:
@@ -1785,30 +1831,14 @@ def get_summary_response(
             payload = json.loads(native_cached_json)
         else:
             assert native_full_row is not None
-            s_has_history = False
-            s_svt_row = None
-            svt_con = None
-            svt_cur = None
-            try:
-                if cache_ui == "fi":
-                    svt_con = open_svt()
-                    svt_cur = svt_con.cursor()
-                    found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (s_pid,))
-                    if found:
-                        s_has_history = True
-                        s_svt_row = found[0]
-                payload, _ = build_summary_payload(
-                    article_row=native_full_row,
-                    has_history=s_has_history,
-                    current_svt_row=s_svt_row,
-                    svt_cur=svt_cur,
-                    use_llm=False,
-                )
-            finally:
-                if svt_cur is not None:
-                    svt_cur.close()
-                if svt_con is not None:
-                    svt_con.close()
+            payload, _ = build_summary_payload(
+                article_row=native_full_row,
+                has_history=native_has_history,
+                use_llm=False,
+                precomputed_history=_precomputed_history(
+                    native_has_history, native_hist_result, s_pid, rag_opener, svt_opener
+                ),
+            )
             if _summary_llm_enabled():
                 _schedule_inflight(
                     background_tasks,
@@ -1825,43 +1855,24 @@ def get_summary_response(
         else:
             fi_pid = int(fi_meta["page_id"])
             fi_rev_id = int(fi_meta["rev_id"])
-            if fi_history_cache_json is not None:
-                h_obj = json.loads(fi_history_cache_json)
+            if not fi_has_history:
+                history_status = "none"
+            elif fi_hist_result is not None:
                 fi_history_out = _fi_history_from_sections_and_ghosts(
                     fi_meta,
-                    h_obj.get("sections", []),
-                    h_obj.get("ghost_sections", []),
+                    fi_hist_result["sections"],
+                    fi_hist_result["ghost_sections"],
                 )
-                history_status = "ready" if fi_history_out is not None else "none"
-            elif fi_default_cache_json is not None:
-                fi_history_out = _fi_history_from_default_payload(
-                    fi_meta,
-                    json.loads(fi_default_cache_json),
-                )
-                history_status = "ready" if fi_history_out is not None else "none"
+                history_status = "ready"
             else:
-                svt_has_fi = False
-                svt_con = open_svt()
-                try:
-                    svt_cur = svt_con.cursor()
-                    try:
-                        svt_has_fi = bool(history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (fi_pid,)))
-                    finally:
-                        svt_cur.close()
-                finally:
-                    svt_con.close()
-
-                if svt_has_fi:
-                    history_status = "building"
-                    _schedule_inflight(
-                        background_tasks,
-                        ("history", fi_pid, fi_rev_id, ""),
-                        _background_history_worker,
-                        rag_opener,
-                        svt_opener,
-                    )
-                else:
-                    history_status = "none"
+                history_status = "building"
+                _schedule_inflight(
+                    background_tasks,
+                    ("history", fi_pid, fi_rev_id, ""),
+                    _background_history_worker,
+                    rag_opener,
+                    svt_opener,
+                )
 
         payload["variant"] = "native"
         payload["out_lang"] = cache_ui
@@ -1875,30 +1886,14 @@ def get_summary_response(
     if default_cached_json is not None:
         fallback_payload = json.loads(default_cached_json)
     else:
-        has_history = False
-        svt_row = None
-        svt_con = None
-        svt_cur = None
-        try:
-            if lang == "fi":
-                svt_con = open_svt()
-                svt_cur = svt_con.cursor()
-                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
-                if found:
-                    has_history = True
-                    svt_row = found[0]
-            fallback_payload, _ = build_summary_payload(
-                article_row=article_row,
-                has_history=has_history,
-                current_svt_row=svt_row,
-                svt_cur=svt_cur,
-                use_llm=False,
-            )
-        finally:
-            if svt_cur is not None:
-                svt_cur.close()
-            if svt_con is not None:
-                svt_con.close()
+        fallback_payload, _ = build_summary_payload(
+            article_row=article_row,
+            has_history=fallback_has_history,
+            use_llm=False,
+            precomputed_history=_precomputed_history(
+                fallback_has_history, fallback_hist_result, page_id, rag_opener, svt_opener
+            ),
+        )
 
     fallback_payload.setdefault("out_lang", lang)
     fallback_payload["variant"] = "fallback"

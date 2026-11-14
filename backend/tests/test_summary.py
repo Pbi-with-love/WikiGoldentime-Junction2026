@@ -8,6 +8,8 @@ import sys
 from types import SimpleNamespace
 from typing import Any
 
+from datetime import datetime, timezone
+
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 import mariadb
@@ -18,6 +20,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from backend import main, summary  # noqa: E402
+
+
+_REAL_FETCH_SVT = summary._fetch_svt_history_and_ghosts
 
 
 def _make_long_section(heading: str, sentence_prefix: str = "Tämä on testilause") -> str:
@@ -511,14 +516,29 @@ class _FakeCursor:
             self._db["cache"][key] = payload
             self._db.setdefault("cache_hashes", {})[key] = src_hash
             self._rows = []
-        elif "FROM wikirag.history_cache" in s:
-            lang, pid, rev_id = params
-            cached_hist = self._db.setdefault("history_cache", {}).get((lang, int(pid), int(rev_id)))
-            self.description = [("json",)]
-            self._rows = [(cached_hist,)] if cached_hist is not None else []
-        elif s.startswith("INSERT INTO wikirag.history_cache"):
-            lang, pid, rev_id, payload = params
-            self._db.setdefault("history_cache", {})[(lang, int(pid), int(rev_id))] = payload
+        elif "FROM wikihistory.article a LEFT JOIN wikihistory.section_history h" in s:
+            rev_id, pid = params
+            svt = self._db["svt_current"].get(int(pid))
+            row = self._db.setdefault("section_history", {}).get(int(pid))
+            fresh = (
+                svt is not None
+                and row is not None
+                and row["rev_id"] == int(rev_id)
+                and row["svt_rev_id"] == svt[1]
+                and row["end_year"] >= datetime.now(timezone.utc).year
+            )
+            self._rows = [(svt[1], row["json"] if fresh else None)] if svt is not None else []
+        elif s.startswith("INSERT INTO wikihistory.section_history"):
+            pid, rev_id, svt_rev_id, end_year, n_sec, n_gh, payload, _ms = params
+            self._db.setdefault("section_history", {})[int(pid)] = {
+                "rev_id": rev_id,
+                "svt_rev_id": svt_rev_id,
+                "end_year": end_year,
+                "sections": n_sec,
+                "ghosts": n_gh,
+                "json": payload,
+            }
+            self._db["section_history_writes"] = self._db.get("section_history_writes", 0) + 1
             self._rows = []
         elif "FROM article WHERE page_id = ?" in s:
             (pid,) = params
@@ -939,7 +959,6 @@ def test_native_sibling_switch_and_fi_history_three_states(monkeypatch):
         },
         "cache": {},
         "cache_hashes": {},
-        "history_cache": {},
         "svt_current": {
             1256: ("Talvisota", 24000000, "User", "", "== Osio 1 ==\nTeksti.", "2026-05-01 00:00:00", None),
         },
@@ -1059,7 +1078,29 @@ def test_native_sibling_switch_and_fi_history_three_states(monkeypatch):
     assert r_sv_plain.content == sv_default_json.encode("utf-8")
     assert r_sv_same.content == sv_default_json.encode("utf-8")
 
-    # C1a: fi:1256?ui=sv -> native sv:23612 + fi_history from fi default row + history_status=="ready", 0 jobs
+    # C1a: fi:1256?ui=sv -> native sv:23612 + fi_history from fresh section_history row, "ready", 0 jobs
+    db_state["section_history"] = {
+        1256: {
+            "rev_id": 23500447,
+            "svt_rev_id": 24000000,
+            "end_year": datetime.now(timezone.utc).year,
+            "json": json.dumps(
+                {
+                    "sections": [
+                        {"no": 1, "heading": "Osio 1", "history": {"added_year": 2004, "changes": 5, "war_years": [2007]}}
+                    ],
+                    "ghost_sections": fi_default["ghost_sections"],
+                },
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ),
+        }
+    }
+    monkeypatch.setattr(
+        summary,
+        "_fetch_svt_history_and_ghosts",
+        lambda *a, **k: pytest.fail("fresh row must not touch SVT snapshots"),
+    )
     r_nat = client.get("/api/summary/fi/1256?ui=sv")
     assert r_nat.status_code == 200
     d_nat = r_nat.json()
@@ -1111,10 +1152,11 @@ def test_native_sibling_switch_and_fi_history_three_states(monkeypatch):
     assert d_to_fi["fi_history"] is None
     assert d_to_fi["history_status"] == "ready"
 
-    # Amendment 016-A: fi_history must NOT depend on Finnish summary_cache!
-    # Delete ('fi', 1256, 23500447, '') from summary_cache and disable LLM -> 'building' state schedules
-    # ONE history-only background job (no LLM) and after running it returns 'ready' with fi_history!
+    # fi_history must NOT depend on Finnish summary_cache; a missing section_history row -> 'building'
+    # schedules ONE history-only background job (no LLM); after running it the next request is 'ready'.
+    monkeypatch.setattr(summary, "_fetch_svt_history_and_ghosts", _REAL_FETCH_SVT)
     del db_state["cache"][("fi", 1256, 23500447, "")]
+    del db_state["section_history"][1256]
     monkeypatch.setenv("SUMMARY_LLM", "0")
     scheduled.clear()
     summary._inflight_jobs.clear()
@@ -1128,10 +1170,15 @@ def test_native_sibling_switch_and_fi_history_three_states(monkeypatch):
     assert hist_args[0][0] == "history"
     assert hist_args[0][1] == 1256
 
-    # Run background history worker -> writes history_cache ONLY (fi summary_cache stays empty!)
+    # a second request while the job is in flight schedules nothing
+    r_dup = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_dup.json()["history_status"] == "building"
+    assert len(scheduled) == 1
+
+    # Run background history worker -> writes section_history ONLY (fi summary_cache stays empty!)
     hist_fn(*hist_args)
     assert ("fi", 1256, 23500447, "") not in db_state["cache"]
-    assert ("fi", 1256, 23500447) in db_state["history_cache"]
+    assert db_state["section_history"][1256]["rev_id"] == 23500447
 
     scheduled.clear()
     r_after_hist = client.get("/api/summary/fi/1256?ui=sv")
@@ -1243,7 +1290,6 @@ def test_summary_translated_build_and_validate(monkeypatch):
         },
         "cache": {("fi", 966363, 24001001, ""): default_json},
         "cache_hashes": {},
-        "history_cache": {},
         "svt_current": {},
         "svt_first": {},
         "svt_snaps": {},
@@ -1356,7 +1402,6 @@ def test_summary_staleness_and_background_rebuild(monkeypatch):
         "cache_hashes": {
             ("fi", 966363, 24001001, "sv"): summary.source_hash(default_v1_json),
         },
-        "history_cache": {},
         "svt_current": {},
         "svt_first": {},
         "svt_snaps": {},
@@ -1412,3 +1457,114 @@ def test_summary_staleness_and_background_rebuild(monkeypatch):
     assert db_state["cache_hashes"][("fi", 966363, 24001001, "sv")] == summary.source_hash(default_v2_json)
     assert len(scheduled) == 0
 
+
+
+# ---- Spec 018: precomputed section history (wikihistory.section_history) ----
+
+_GHOST_WIKI = "== Haamuluku ==\nPoistettu kappale joka oli pitkään mukana artikkelissa."
+_CUR_WIKI = "\n\n".join(f"== Osio {i} ==\nTeksti {i}." for i in range(1, 5))
+
+
+def _hist_db(with_svt: bool = True) -> dict[str, Any]:
+    text = _make_long_article("Talvisota", num_sections=4)
+    snaps = {}
+    for yr in range(2024, 2040):
+        body = f"{_GHOST_WIKI}\n\n{_CUR_WIKI}" if yr <= 2025 else _CUR_WIKI
+        snaps[(1256, yr)] = ("Talvisota", 23000000 + yr, "U", "", body, f"{yr}-01-01 00:00:00", None)
+    return {
+        "articles": {
+            ("fi", 1256): ("fi", 1256, 23500447, "Q1", "Talvisota", "https://fi.wikipedia.org/wiki/Talvisota", text)
+        },
+        "cache": {},
+        "svt_current": (
+            {1256: ("Talvisota", 24000000, "U", "", _CUR_WIKI, "2026-05-01 00:00:00", None)} if with_svt else {}
+        ),
+        "svt_first": {1256: "2023-01-01 00:00:00"},
+        "svt_snaps": snaps,
+    }
+
+
+def _article_dict(db: dict[str, Any]) -> dict[str, Any]:
+    cols = ("lang", "page_id", "rev_id", "wikidata_id", "title", "url", "text")
+    return dict(zip(cols, db["articles"][("fi", 1256)]))
+
+
+def _svt_row(db: dict[str, Any]) -> dict[str, Any]:
+    return summary.history.rows(_FakeConn(db).cursor(), summary.SVT_CURRENT_ROW_SQL, (1256,))[0]
+
+
+def test_compute_section_history_shape_and_short_rule(monkeypatch):
+    db = _hist_db()
+    snapshots = [(2025, 1, f"{_GHOST_WIKI}\n\n{_CUR_WIKI}"), (2026, 2, f"{_GHOST_WIKI}\n\n{_CUR_WIKI}"), (2027, 3, _CUR_WIKI)]
+
+    def fake_fetch(svt_cur, page_id, current_svt_row, current_sections, all_current_headings):
+        return summary.compute_history_and_ghosts(
+            snapshots, current_sections, all_current_headings, set(), current_year=2027
+        )
+
+    monkeypatch.setattr(summary, "_fetch_svt_history_and_ghosts", fake_fetch)
+    result = summary.compute_section_history(_article_dict(db), None, {})
+    _, kept, keys = summary.split_markdown_sections(_article_dict(db)["text"])
+    hist, ghosts = summary.compute_history_and_ghosts(snapshots, kept, keys, set(), current_year=2027)
+    assert list(result) == ["sections", "ghost_sections"]
+    assert result["sections"] == [{"no": s["no"], "heading": s["heading"], "history": hist[s["no"]]} for s in kept]
+    assert result["ghost_sections"] == ghosts and [g["heading"] for g in ghosts] == ["Haamuluku"]
+    assert summary.history_by_no(result) == hist
+
+    monkeypatch.setattr(summary, "_fetch_svt_history_and_ghosts", lambda *a, **k: pytest.fail("short: no SVT"))
+    short = {**_article_dict(db), "text": "# Lyhyt\n\nVain lyhyt teksti."}
+    assert summary.compute_section_history(short, None, {}) == {"sections": [], "ghost_sections": []}
+
+
+def test_precomputed_history_payload_is_byte_identical_to_old_path():
+    db = _hist_db()
+    art, svt_row, cur = _article_dict(db), _svt_row(db), _FakeConn(db).cursor()
+    old, _ = summary.build_summary_payload(art, True, svt_row, cur)
+    result = summary.compute_section_history(art, cur, svt_row)
+    assert result["ghost_sections"], "fixture must produce a ghost"
+    stored = json.loads(json.dumps(result, separators=(",", ":"), ensure_ascii=False))
+    new, _ = summary.build_summary_payload(
+        art, True, precomputed_history=(summary.history_by_no(stored), stored["ghost_sections"])
+    )
+    assert json.dumps(new, ensure_ascii=False) == json.dumps(old, ensure_ascii=False)
+
+
+def test_request_states_fresh_stale_and_no_history(monkeypatch):
+    db = _hist_db()
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db))
+    monkeypatch.setattr(summary, "_open_svt", lambda: _FakeConn(db))
+    monkeypatch.setattr(summary, "_cache_table_ready", False)
+    monkeypatch.setattr(summary, "_section_history_table_ready", False)
+    monkeypatch.setenv("SUMMARY_LLM", "0")
+    calls = []
+
+    def counting(*a, **k):
+        calls.append(1)
+        return _REAL_FETCH_SVT(*a, **k)
+
+    monkeypatch.setattr(summary, "_fetch_svt_history_and_ghosts", counting)
+    client = TestClient(main.app)
+
+    old, _ = summary.build_summary_payload(_article_dict(db), True, _svt_row(db), _FakeConn(db).cursor())
+    expected = json.dumps(old, separators=(",", ":"), ensure_ascii=False)
+    calls.clear()
+
+    # missing row -> old path once + one upsert; body equals the old path
+    r1 = client.get("/api/summary/fi/1256")
+    assert r1.text == expected and len(calls) == 1 and db["section_history_writes"] == 1
+    # fresh row -> no SVT snapshot query, same body, no new write
+    r2 = client.get("/api/summary/fi/1256")
+    assert r2.text == expected and len(calls) == 1 and db["section_history_writes"] == 1
+    # stale rev_id -> old path once more + one upsert
+    db["section_history"][1256]["rev_id"] += 1
+    r3 = client.get("/api/summary/fi/1256")
+    assert r3.text == expected and len(calls) == 2 and db["section_history_writes"] == 2
+    assert db["section_history"][1256]["rev_id"] == 23500447
+
+    # no wikihistory.article row -> has_history false, history null, no ghosts, no SVT work
+    db2 = _hist_db(with_svt=False)
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db2))
+    calls.clear()
+    d = client.get("/api/summary/fi/1256").json()
+    assert d["article"]["has_history"] is False and d["ghost_sections"] == []
+    assert all(sec["history"] is None for sec in d["sections"]) and calls == []
