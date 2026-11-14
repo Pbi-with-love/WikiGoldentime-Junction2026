@@ -4,14 +4,22 @@ Read docs/memory/ARCHITECTURE.md first (Infrastructure: SSH command, container n
 client, Ollama bge-m3 options, "bulk embedding on a Mac through an SSH tunnel", tmux rules, "never touch
 the organizers' apps"; Schemas; Rules: vector-search subquery pattern; Chunking paragraph).
 
-> **Orchestrator decision (2026-11-14) — overrides every "Mac" / "tunnel" / "digest" line below:**
-> embedding runs **on the VPS**, not the Mac (the Mac has no Ollama). `embed_chunks.py` and `chunk.py`
-> run on the VPS against the VPS Ollama (127.0.0.1:11434, same bge-m3 as the existing article
-> vectors, so no digest check) and 3307 directly — no SSH tunnel. Run the embed in
-> `tmux new -d -s embed 'nice -n 10 ...'` with ONE request at a time (2 vCPU; the organizers' :8000 and
-> request-time embedding must stay usable). Expect hours; overnight is fine. Embed fi first, then sv,
-> en; resumable, so a kill/restart mid-run is the resume proof. Report chunks/s after the first 10 min
-> and the projected total; if projected total > 10 h, send a `question` before continuing past fi.
+> **Orchestrator decision (2026-11-14, final) — split VPS / Mac:**
+> - **VPS (now, cheap):** `chunk.py` fills `chunk`, and single-chunk articles get their existing
+>   article vector copied into `chunk_vector` in SQL. **No bulk embedding on the VPS** (2 vCPU,
+>   measured ~3.6 s per chunk; it would slow every other worker and the API). Stop any VPS embed job.
+> - **Mac (user runs it):** `embed_chunks.py` runs on the user's Mac with local Ollama bge-m3,
+>   writing to 127.0.0.1:3307 through
+>   `ssh -i ~/.ssh/id_serverTech -o IdentitiesOnly=yes -N -L 3307:127.0.0.1:3307 root@72.61.20.120`.
+>   Resumable: skips chunks that already have a vector. Mac bge-m3 digest must equal the VPS's
+>   (`790764642607`); the script checks `ollama list`/`/api/tags` and refuses on mismatch.
+>   Options: `--pages-from small` (first batch) or `--all`; `--lang`.
+> - **Small batch first:** chunks of the articles behind the 37 test questions (`data/test-questions.tsv`
+>   answer pages) + the 50 `wikihistory.article_list` articles. Early hit@k: `eval_chunks.py --partial`
+>   ranks by chunk vectors where a page has them, else its article vector; labelled "partial" in output.
+> - The worker delivers the exact Mac commands (Ollama install/pull, venv, tunnel, run, resume) in
+>   `scripts/EMBED_ON_MAC.md`, and tests the Mac script itself on a handful of chunks only if a Mac
+>   Ollama is available; otherwise test against the VPS Ollama through a tunnel with `--limit 5`.
 
 ## Goal
 Split every `wikirag.article` into section chunks, embed them with bge-m3 on the Mac, store them in
