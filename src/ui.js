@@ -396,7 +396,16 @@ export function createUI({
     const itemsHtml = rows
       .slice(0, 8)
       .map((r) => {
-        const siblings = r.wikidata_id && also[r.wikidata_id] ? also[r.wikidata_id] : [];
+        // `also` is keyed by wikidata_id and excludes only the first row's language, so merge in the
+        // other result rows of the same entity and drop this row's own language.
+        const merged = new Map();
+        for (const [sLang, sTitle] of [
+          ...rows.filter((o) => o.wikidata_id && o.wikidata_id === r.wikidata_id).map((o) => [o.lang, o.title]),
+          ...(r.wikidata_id && also[r.wikidata_id] ? also[r.wikidata_id] : []),
+        ]) {
+          if (sLang !== r.lang && !merged.has(sLang)) merged.set(sLang, sTitle);
+        }
+        const siblings = [...merged];
         const alsoHtml =
           siblings.length > 0
             ? `<span class="search-also-group" aria-label="Also in other languages">${alsoInPrefix} ${siblings
@@ -495,6 +504,16 @@ export function createUI({
         .map((ms, idx) => {
           const isSelected = idx === activeMilestoneIdx;
           const oldidUrl = ms.url || buildWikiOldidUrl("fi", ms.rev_id);
+          const cb = ms.changed_by;
+          const cbHtml = cb
+            ? `<span class="milestone-card-changed-by">${escapeHtml(
+                t("ask.changedBy", { user: cb.user || "", date: fmtDate(cb.row_start) })
+              )} <a href="${escapeHtml(
+                cb.url || buildWikiOldidUrl("fi", cb.rev_id)
+              )}" target="_blank" rel="noopener noreferrer" class="milestone-oldid-link">oldid=${escapeHtml(
+                cb.rev_id
+              )}</a></span>`
+            : "";
           return `
             <div class="milestone-node-card ${isSelected ? "is-active" : ""}">
               <button type="button" class="milestone-node-btn" data-ms-idx="${idx}">
@@ -502,6 +521,7 @@ export function createUI({
                 <span class="milestone-years">${ms.from_year}–${ms.to_year}</span>
                 <span class="milestone-user">${escapeHtml(ms.user)}</span>
               </button>
+              ${cbHtml}
               <a
                 href="${escapeHtml(oldidUrl)}"
                 target="_blank"
