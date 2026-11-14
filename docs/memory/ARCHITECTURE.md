@@ -31,9 +31,9 @@ offers related articles to keep reading. Judges are the authors of the organizer
   set needs 4 more. Decision: build and test on the 50; rerun the pipeline when full M is loaded.
 - Our own Python on the VPS: `~/wikimemory/` with its own `.venv` (never the organizers' venvs).
 - Ollama on 127.0.0.1:11434, model `bge-m3`; always `{"num_ctx": 8192, "num_batch": 8192}`.
-  Request-time embedding only on the VPS (CPU). Bulk embedding (chunks, spec 008) also
-  runs on the VPS, overnight in tmux under `nice`, one request at a time (decision 2026-11-14; the Mac
-  has no Ollama).
+  Request-time embedding only on the VPS (CPU). Bulk embedding (chunks, spec 008) runs
+  on the Mac (local Ollama bge-m3, same digest as VPS `790764642607`) through an SSH tunnel to 3307;
+  never bulk-embed on the VPS (measured ~3.6 s per 300-word chunk on 2 vCPU).
 - Organizers' repos on the server: `~/mariadb-vector-wikipedia-rag`, `~/mariadb-system-versioning-wikipedia`
   (each with its own `.venv`).
 - Every service binds to 127.0.0.1; access through SSH tunnel. Docker ignores ufw: publish ports as
