@@ -14,6 +14,15 @@ Wikidata item), ordered by year, each card with real lead text, history numbers,
 reason it is on the road. `GET /api/threads/{lang}/{page_id}` returns real threads from the same
 neighbour data.
 
+**Amendment 024-A (orchestrator, after Part B merged as 72e7406):** sample roads checked on the VPS. Talvisota 1256
+is clean. Hallin Janne (fi 375415) is mostly on topic (Antti Rannanjärvi, Matti Haapoja, Kustaa Nummelin, Mommilan
+veriteot…) but includes unrelated films ("Kiljusen herrasväki (elokuva)", "Jäähyväiset presidentille (elokuva)",
+"Veturimiehet heiluttaa"). Part A must reduce this noise with a simple, explainable rule (e.g. prefer neighbours that
+share a category with the seed when enough exist in the 40-item pool, or a similarity floor) and show the before/after
+station list for Hallin Janne and Talvisota in worker_done. Also handle the lead-year quirk Part B reported (a station
+taking a misleading year from its lead sentence, e.g. "Suomi toisessa maailmansodassa" -> 1920): prefer event_year from
+the stars data; state the rule.
+
 ## How the UI reaches it (no new endpoint)
 - Panel button "See as a road" (`#panel-road-btn`, ui.js ~2585) -> `onEnterRoad({lang, page_id})` ->
   main.js `enterTalvitieRoad` -> `getTopicRoad({lang, page_id})`. Unchanged; only the flag flips.
