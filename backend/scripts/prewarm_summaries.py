@@ -71,16 +71,51 @@ def main(argv: list[str] | None = None) -> int:
     ui_langs = _parse_ui_langs(args.ui)
     summary.ensure_cache_table()
 
+    NEVER_FORCE_FI_DEFAULTS = {1256, 1150, 440}
+
     total_failed = 0
     for lang, page_id in targets:
         for ui_lang in ui_langs:
             t0 = time.perf_counter()
-            payload, stats, from_cache = summary.build_and_cache_llm_summary(
-                lang=lang,
-                page_id=page_id,
-                force=args.force,
-                ui=ui_lang,
-            )
+            if ui_lang is not None and ui_lang != lang:
+                # Always ensure the requested article's default row exists without forcing it
+                summary.build_and_cache_llm_summary(
+                    lang=lang,
+                    page_id=page_id,
+                    force=False,
+                    ui=None,
+                )
+                sibling_pid = summary.find_native_sibling(lang, page_id, ui_lang)
+                if sibling_pid is not None:
+                    force_sib = bool(
+                        args.force and not (ui_lang == "fi" and sibling_pid in NEVER_FORCE_FI_DEFAULTS)
+                    )
+                    payload, stats, from_cache = summary.build_and_cache_llm_summary(
+                        lang=ui_lang,
+                        page_id=sibling_pid,
+                        force=force_sib,
+                        ui=None,
+                    )
+                    mode_tag = f"native {ui_lang}:{sibling_pid}"
+                else:
+                    payload, stats, from_cache = summary.build_and_cache_llm_summary(
+                        lang=lang,
+                        page_id=page_id,
+                        force=args.force,
+                        ui=ui_lang,
+                    )
+                    mode_tag = "translated"
+            else:
+                force_def = bool(
+                    args.force and not (lang == "fi" and page_id in NEVER_FORCE_FI_DEFAULTS)
+                )
+                payload, stats, from_cache = summary.build_and_cache_llm_summary(
+                    lang=lang,
+                    page_id=page_id,
+                    force=force_def,
+                    ui=None,
+                )
+                mode_tag = "default"
             elapsed = time.perf_counter() - t0
             title = payload["article"]["title"]
             rev_id = payload["rev_id"]
@@ -88,10 +123,12 @@ def main(argv: list[str] | None = None) -> int:
             total_failed += stats.failed_calls
             ui_tag = ui_lang or "-"
             print(
-                f"{lang}:{page_id} ui={ui_tag} ({title}) rev={rev_id} [{status}]: "
+                f"{lang}:{page_id} ui={ui_tag} [{mode_tag}] ({title}) rev={rev_id} [{status}]: "
                 f"sections={stats.sections} ghosts={stats.ghosts} "
                 f"facts_kept={stats.facts_kept} facts_dropped={stats.facts_dropped} "
-                f"failed_calls={stats.failed_calls} seconds={elapsed:.2f} "
+                f"calls={stats.total_calls} failed_calls={stats.failed_calls} "
+                f"strings={stats.translate_strings} fallbacks={stats.translate_fallbacks} "
+                f"seconds={elapsed:.2f} "
                 f"input_tokens={stats.input_tokens} output_tokens={stats.output_tokens}",
                 flush=True,
             )

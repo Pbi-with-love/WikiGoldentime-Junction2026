@@ -449,26 +449,76 @@ class _FakeCursor:
         elif s.startswith("CREATE TABLE IF NOT EXISTS"):
             self._rows = []
         elif "FROM wikirag.article" in s:
-            lang, pid = params
-            row = self._db["articles"].get((lang, int(pid)))
-            self.description = [
-                ("lang",),
-                ("page_id",),
-                ("rev_id",),
-                ("wikidata_id",),
-                ("title",),
-                ("url",),
-                ("text",),
-            ]
-            self._rows = [row] if row is not None else []
+            if "WHERE lang = ? AND wikidata_id = ?" in s:
+                lang, wid = params
+                matches = [
+                    r
+                    for r in self._db["articles"].values()
+                    if r[0] == lang and wid is not None and r[3] == wid
+                ]
+                matches.sort(key=lambda r: int(r[1]))
+                if s.startswith("SELECT lang, page_id, rev_id, wikidata_id, title, url FROM"):
+                    self.description = [
+                        ("lang",),
+                        ("page_id",),
+                        ("rev_id",),
+                        ("wikidata_id",),
+                        ("title",),
+                        ("url",),
+                    ]
+                    self._rows = [matches[0][:6]] if matches else []
+                else:
+                    self.description = [
+                        ("lang",),
+                        ("page_id",),
+                        ("rev_id",),
+                        ("wikidata_id",),
+                        ("title",),
+                        ("url",),
+                        ("text",),
+                    ]
+                    self._rows = [matches[0]] if matches else []
+            else:
+                lang, pid = params
+                row = self._db["articles"].get((lang, int(pid)))
+                self.description = [
+                    ("lang",),
+                    ("page_id",),
+                    ("rev_id",),
+                    ("wikidata_id",),
+                    ("title",),
+                    ("url",),
+                    ("text",),
+                ]
+                self._rows = [row] if row is not None else []
+        elif "LEFT JOIN wikirag.summary_cache d" in s:
+            lang, pid, rev_id, ui = params
+            u_key = (lang, int(pid), int(rev_id), str(ui))
+            d_key = (lang, int(pid), int(rev_id), "")
+            u_json = self._db["cache"].get(u_key)
+            u_hash = self._db.get("cache_hashes", {}).get(u_key)
+            d_json = self._db["cache"].get(d_key)
+            self.description = [("json",), ("source_hash",), ("json",)]
+            self._rows = [(u_json, u_hash, d_json)] if u_json is not None else []
         elif "FROM wikirag.summary_cache" in s:
             lang, pid, rev_id, ui = params
             cached = self._db["cache"].get((lang, int(pid), int(rev_id), str(ui)))
             self.description = [("json",)]
             self._rows = [(cached,)] if cached is not None else []
         elif s.startswith("INSERT INTO wikirag.summary_cache"):
-            lang, pid, rev_id, ui, payload = params
-            self._db["cache"][(lang, int(pid), int(rev_id), str(ui))] = payload
+            lang, pid, rev_id, ui, src_hash, payload = params
+            key = (lang, int(pid), int(rev_id), str(ui))
+            self._db["cache"][key] = payload
+            self._db.setdefault("cache_hashes", {})[key] = src_hash
+            self._rows = []
+        elif "FROM wikirag.history_cache" in s:
+            lang, pid, rev_id = params
+            cached_hist = self._db.setdefault("history_cache", {}).get((lang, int(pid), int(rev_id)))
+            self.description = [("json",)]
+            self._rows = [(cached_hist,)] if cached_hist is not None else []
+        elif s.startswith("INSERT INTO wikirag.history_cache"):
+            lang, pid, rev_id, payload = params
+            self._db.setdefault("history_cache", {})[(lang, int(pid), int(rev_id))] = payload
             self._rows = []
         elif "FROM article WHERE page_id = ?" in s:
             (pid,) = params
@@ -700,31 +750,65 @@ def test_ui_translation_cache_miss_fallback_validation_and_grounding(monkeypatch
     assert len(scheduled) == 1
     assert scheduled[0][1][0] == ("fi", 1256, 23500447, "en")
 
-    # 5. Building ui=sv LLM summary uses translated system prompt, preserves verbatim Finnish source,
-    #    drops translated source, and writes ('fi', 1256, 23500447, 'sv') without touching '' row.
+    # 5. Building ui=sv LLM summary translates from seeded '' default row, preserves verbatim
+    #    Finnish source, writes ('fi', 1256, 23500447, 'sv') with source_hash, and leaves '' untouched.
+    seeded_default = {
+        "article": {
+            "lang": "fi",
+            "page_id": 1256,
+            "wikidata_id": "Q134949",
+            "title": "Talvisota",
+            "url": "https://fi.wikipedia.org/wiki/Talvisota",
+            "words": 1800,
+            "reading_minutes": 8,
+            "has_history": True,
+        },
+        "mode": "llm",
+        "out_lang": "fi",
+        "rev_id": 23500447,
+        "tldr": "Talvisota alkoi 30. marraskuuta 1939.",
+        "facts": [{"label": "Alkamispäivä", "value": "30. marraskuuta 1939", "source": lead_sentence}],
+        "sections": [
+            {
+                "no": 1,
+                "heading": "Osio 1",
+                "words": 400,
+                "reading_minutes": 2,
+                "one_line": "Ensimmäinen osa.",
+                "summary": "Kaksi lausetta suomeksi. Toinen lause.",
+                "facts": [],
+                "text": "Raaka teksti.",
+                "history": {"added_year": 2005, "changes": 3, "war_years": []},
+            }
+        ],
+        "ghost_sections": [],
+    }
+    seeded_default_json = json.dumps(seeded_default, separators=(",", ":"), ensure_ascii=False)
+    db_state["cache"][("fi", 1256, 23500447, "")] = seeded_default_json
     recorded_calls: list[dict[str, Any]] = []
 
     class FakeMessages:
         def create(self, **kwargs):
             recorded_calls.append(kwargs)
             user_content = kwargs["messages"][0]["content"]
-            if "<article_text" in user_content or user_content.startswith("Title: "):
-                payload = {
-                    "tldr": "Vinterkriget började den 30 november 1939.",
-                    "facts": [
-                        {"label": "Startdatum", "value": "30 november 1939", "source": lead_sentence},
-                        {"label": "Translated", "value": "Bad", "source": "Vinterkriget började den 30 november 1939."},
-                    ],
-                }
-            else:
-                payload = {"one_line": "Avsnitt på svenska.", "summary": "Två meningar på svenska.", "facts": []}
+            start = user_content.index("<strings>\n") + len("<strings>\n")
+            end = user_content.index("\n</strings>")
+            items_in = json.loads(user_content[start:end])
+            sv_map = {
+                "Talvisota alkoi 30. marraskuuta 1939.": "Vinterkriget började den 30 november 1939.",
+                "Alkamispäivä": "Startdatum",
+                "30. marraskuuta 1939": "30 november 1939",
+                "Ensimmäinen osa.": "Avsnitt på svenska.",
+                "Kaksi lausetta suomeksi. Toinen lause.": "Två meningar på svenska.",
+            }
+            out_items = [{"id": it["id"], "text": sv_map.get(it["text"], f"[sv] {it['text']}")} for it in items_in]
             return type(
                 "Resp",
                 (),
                 {
                     "stop_reason": "end_turn",
                     "usage": type("U", (), {"input_tokens": 50, "output_tokens": 25})(),
-                    "content": [type("B", (), {"type": "text", "text": json.dumps(payload)})()],
+                    "content": [type("B", (), {"type": "text", "text": json.dumps({"items": out_items})})()],
                 },
             )()
 
@@ -732,19 +816,599 @@ def test_ui_translation_cache_miss_fallback_validation_and_grounding(monkeypatch
     built, stats, from_cache = summary.build_and_cache_llm_summary("fi", 1256, ui="sv", llm_client=fake_client)
     assert from_cache is False
     assert built["out_lang"] == "sv"
+    assert built["variant"] == "translated"
     assert built["tldr"] == "Vinterkriget började den 30 november 1939."
     assert len(built["facts"]) == 1
     assert built["facts"][0]["label"] == "Startdatum"
     assert built["facts"][0]["source"] == lead_sentence
-    assert stats.facts_dropped == 1
-    assert recorded_calls[0]["system"] == summary.TRANSLATED_SYSTEM_PROMPTS["sv"]
+    assert len(recorded_calls) == 1
+    assert recorded_calls[0]["max_tokens"] == 16000
     assert ("fi", 1256, 23500447, "sv") in db_state["cache"]
-    assert ("fi", 1256, 23500447, "") not in db_state["cache"]
+    assert db_state["cache"][("fi", 1256, 23500447, "")] == seeded_default_json
 
-    # 6. Subsequent GET ?ui=sv hits cache directly
+    # 6. Subsequent GET ?ui=sv hits fresh cache directly with 0 scheduled jobs
     scheduled.clear()
     r_sv_hit = client.get("/api/summary/fi/1256?ui=sv")
     assert r_sv_hit.status_code == 200
     assert r_sv_hit.json()["out_lang"] == "sv"
+    assert r_sv_hit.json()["variant"] == "translated"
     assert r_sv_hit.json()["mode"] == "llm"
     assert len(scheduled) == 0
+
+
+def _make_fake_translate_client(fn):
+    recorded_calls: list[dict[str, Any]] = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            recorded_calls.append(kwargs)
+            user_content = kwargs["messages"][0]["content"]
+            start = user_content.index("<strings>\n") + len("<strings>\n")
+            end = user_content.index("\n</strings>")
+            items_in = json.loads(user_content[start:end])
+            result = fn(items_in, kwargs)
+            if result is None:
+                return type(
+                    "Resp",
+                    (),
+                    {
+                        "stop_reason": "end_turn",
+                        "usage": type("U", (), {"input_tokens": 10, "output_tokens": 0})(),
+                        "content": [type("B", (), {"type": "text", "text": "not valid json"})()],
+                    },
+                )()
+            return type(
+                "Resp",
+                (),
+                {
+                    "stop_reason": "end_turn",
+                    "usage": type("U", (), {"input_tokens": 120, "output_tokens": 80})(),
+                    "content": [type("B", (), {"type": "text", "text": json.dumps({"items": result})})()],
+                },
+            )()
+
+    client = type("Client", (), {"messages": FakeMessages()})()
+    client.recorded_calls = recorded_calls
+    return client
+
+
+def test_native_sibling_switch_and_fi_history_three_states(monkeypatch):
+    fi_text = _make_long_article("Talvisota", num_sections=4)
+    sv_text = _make_long_article("Vinterkriget", num_sections=4)
+    nohist_fi_text = _make_long_article("Suomen Nato-jäsenhakemus", num_sections=4)
+    nohist_sv_text = _make_long_article("Finlands Nato-medlemskapsansökan", num_sections=4)
+    sv_only_text = _make_long_article("Svensk artikel", num_sections=4)
+    en_only_text = _make_long_article("English counterpart", num_sections=4)
+
+    db_state: dict[str, Any] = {
+        "articles": {
+            ("fi", 1256): (
+                "fi",
+                1256,
+                23500447,
+                "Q134949",
+                "Talvisota",
+                "https://fi.wikipedia.org/wiki/Talvisota",
+                fi_text,
+            ),
+            ("sv", 23612): (
+                "sv",
+                23612,
+                555001,
+                "Q134949",
+                "Vinterkriget",
+                "https://sv.wikipedia.org/wiki/Vinterkriget",
+                sv_text,
+            ),
+            ("fi", 777): (
+                "fi",
+                777,
+                9001,
+                "Q777",
+                "Ei historiaa",
+                "https://fi.wikipedia.org/wiki/Ei_historiaa",
+                nohist_fi_text,
+            ),
+            ("sv", 888): (
+                "sv",
+                888,
+                9002,
+                "Q777",
+                "Ingen historik",
+                "https://sv.wikipedia.org/wiki/Ingen_historik",
+                nohist_sv_text,
+            ),
+            ("sv", 999): (
+                "sv",
+                999,
+                9901,
+                "Q999",
+                "Svensk artikel",
+                "https://sv.wikipedia.org/wiki/Svensk_artikel",
+                sv_only_text,
+            ),
+            ("en", 998): (
+                "en",
+                998,
+                9902,
+                "Q999",
+                "English counterpart",
+                "https://en.wikipedia.org/wiki/English_counterpart",
+                en_only_text,
+            ),
+        },
+        "cache": {},
+        "cache_hashes": {},
+        "history_cache": {},
+        "svt_current": {
+            1256: ("Talvisota", 24000000, "User", "", "== Osio 1 ==\nTeksti.", "2026-05-01 00:00:00", None),
+        },
+        "svt_first": {1256: "2024-01-01 00:00:00"},
+        "svt_snaps": {
+            (1256, 2024): ("Talvisota", 23000000, "User", "", "== Haamuluku ==\nPoistettu kappale riittävän pitkä.\n\n== Osio 1 ==\nVanha.", "2024-01-01 00:00:00", None),
+            (1256, 2025): ("Talvisota", 23500000, "User", "", "== Osio 1 ==\nVanha.", "2025-01-01 00:00:00", None),
+            (1256, 2026): ("Talvisota", 23800000, "User", "", "== Osio 1 ==\nUusi.", "2026-01-01 00:00:00", None),
+        },
+    }
+
+    sv_default = {
+        "article": {
+            "lang": "sv",
+            "page_id": 23612,
+            "wikidata_id": "Q134949",
+            "title": "Vinterkriget",
+            "url": "https://sv.wikipedia.org/wiki/Vinterkriget",
+            "words": 2000,
+            "reading_minutes": 9,
+            "has_history": False,
+        },
+        "mode": "llm",
+        "out_lang": "sv",
+        "rev_id": 555001,
+        "tldr": "Vinterkriget var ett krig mellan Finland och Sovjetunionen.",
+        "facts": [{"label": "Tid", "value": "1939–1940", "source": "Kriget varade 105 dagar."}],
+        "sections": [
+            {
+                "no": 1,
+                "heading": "Bakgrund",
+                "words": 500,
+                "reading_minutes": 3,
+                "one_line": "Bakgrund till kriget.",
+                "summary": "Sovjetunionen ställde krav hösten 1939.",
+                "facts": [],
+                "text": "Råtext på svenska.",
+                "history": None,
+            }
+        ],
+        "ghost_sections": [],
+    }
+    fi_default = {
+        "article": {
+            "lang": "fi",
+            "page_id": 1256,
+            "wikidata_id": "Q134949",
+            "title": "Talvisota",
+            "url": "https://fi.wikipedia.org/wiki/Talvisota",
+            "words": 2000,
+            "reading_minutes": 9,
+            "has_history": True,
+        },
+        "mode": "llm",
+        "out_lang": "fi",
+        "rev_id": 23500447,
+        "tldr": "Talvisota oli sota.",
+        "facts": [],
+        "sections": [
+            {
+                "no": 1,
+                "heading": "Osio 1",
+                "words": 400,
+                "reading_minutes": 2,
+                "one_line": "Yksi.",
+                "summary": "Tiivistelmä.",
+                "facts": [],
+                "text": "Teksti.",
+                "history": {"added_year": 2004, "changes": 5, "war_years": [2007]},
+            },
+            {
+                "no": 2,
+                "heading": "Osio 2",
+                "words": 400,
+                "reading_minutes": 2,
+                "one_line": "Kaksi.",
+                "summary": "Tiivistelmä 2.",
+                "facts": [],
+                "text": "Teksti 2.",
+                "history": None,
+            },
+        ],
+        "ghost_sections": [
+            {
+                "after_no": 1,
+                "heading": "Haamuluku",
+                "from_year": 2007,
+                "removed_year": 2015,
+                "text": "Poistettu teksti.",
+                "oldid": 9876543,
+            }
+        ],
+    }
+
+    sv_default_json = json.dumps(sv_default, separators=(",", ":"), ensure_ascii=False)
+    fi_default_json = json.dumps(fi_default, separators=(",", ":"), ensure_ascii=False)
+    db_state["cache"][("sv", 23612, 555001, "")] = sv_default_json
+    db_state["cache"][("fi", 1256, 23500447, "")] = fi_default_json
+    db_state["cache"][("sv", 888, 9002, "")] = json.dumps({**sv_default, "article": {**sv_default["article"], "page_id": 888, "title": "Ingen historik"}, "rev_id": 9002})
+    db_state["cache"][("en", 998, 9902, "")] = json.dumps({**sv_default, "article": {**sv_default["article"], "lang": "en", "page_id": 998, "title": "English counterpart"}, "out_lang": "en", "rev_id": 9902})
+
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_open_svt", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_cache_table_ready", False)
+    summary._inflight_jobs.clear()
+
+    scheduled: list[tuple] = []
+    monkeypatch.setenv("SUMMARY_LLM", "1")
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, fn, *args: scheduled.append((fn, args)))
+
+    client = TestClient(main.app)
+
+    # A6: ui absent and ui == lang return byte-identical stored default JSON
+    r_sv_plain = client.get("/api/summary/sv/23612")
+    r_sv_same = client.get("/api/summary/sv/23612?ui=sv")
+    assert r_sv_plain.status_code == 200
+    assert r_sv_plain.content == sv_default_json.encode("utf-8")
+    assert r_sv_same.content == sv_default_json.encode("utf-8")
+
+    # C1a: fi:1256?ui=sv -> native sv:23612 + fi_history from fi default row + history_status=="ready", 0 jobs
+    r_nat = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_nat.status_code == 200
+    d_nat = r_nat.json()
+    assert d_nat["variant"] == "native"
+    assert d_nat["out_lang"] == "sv"
+    assert d_nat["article"]["lang"] == "sv"
+    assert d_nat["article"]["page_id"] == 23612
+    assert d_nat["requested"] == {
+        "lang": "fi",
+        "page_id": 1256,
+        "title": "Talvisota",
+        "url": "https://fi.wikipedia.org/wiki/Talvisota",
+    }
+    assert d_nat["history_status"] == "ready"
+    assert d_nat["fi_history"] == {
+        "article": {
+            "lang": "fi",
+            "page_id": 1256,
+            "title": "Talvisota",
+            "url": "https://fi.wikipedia.org/wiki/Talvisota",
+        },
+        "rev_id": 23500447,
+        "sections": [{"no": 1, "heading": "Osio 1", "history": {"added_year": 2004, "changes": 5, "war_years": [2007]}}],
+        "ghost_sections": fi_default["ghost_sections"],
+    }
+    assert len(scheduled) == 0
+
+    # C1b: sv sibling default missing -> extractive sv + 1 background job ("sv", 23612, 555001, "")
+    del db_state["cache"][("sv", 23612, 555001, "")]
+    r_nat_miss = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_nat_miss.status_code == 200
+    d_miss = r_nat_miss.json()
+    assert d_miss["variant"] == "native"
+    assert d_miss["mode"] == "extractive"
+    assert d_miss["article"]["page_id"] == 23612
+    assert len(scheduled) == 1
+    assert scheduled[0][1][0] == ("sv", 23612, 555001, "")
+
+    # C1c: ui=fi on sv:23612 with fi sibling -> native fi, fi_history is None
+    db_state["cache"][("sv", 23612, 555001, "")] = sv_default_json
+    scheduled.clear()
+    summary._inflight_jobs.clear()
+    r_to_fi = client.get("/api/summary/sv/23612?ui=fi")
+    assert r_to_fi.status_code == 200
+    d_to_fi = r_to_fi.json()
+    assert d_to_fi["variant"] == "native"
+    assert d_to_fi["out_lang"] == "fi"
+    assert d_to_fi["article"]["page_id"] == 1256
+    assert d_to_fi["fi_history"] is None
+    assert d_to_fi["history_status"] == "ready"
+
+    # Amendment 016-A: fi_history must NOT depend on Finnish summary_cache!
+    # Delete ('fi', 1256, 23500447, '') from summary_cache and disable LLM -> 'building' state schedules
+    # ONE history-only background job (no LLM) and after running it returns 'ready' with fi_history!
+    del db_state["cache"][("fi", 1256, 23500447, "")]
+    monkeypatch.setenv("SUMMARY_LLM", "0")
+    scheduled.clear()
+    summary._inflight_jobs.clear()
+    r_building = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_building.status_code == 200
+    d_building = r_building.json()
+    assert d_building["history_status"] == "building"
+    assert d_building["fi_history"] is None
+    assert len(scheduled) == 1
+    hist_fn, hist_args = scheduled[0]
+    assert hist_args[0][0] == "history"
+    assert hist_args[0][1] == 1256
+
+    # Run background history worker -> writes history_cache ONLY (fi summary_cache stays empty!)
+    hist_fn(*hist_args)
+    assert ("fi", 1256, 23500447, "") not in db_state["cache"]
+    assert ("fi", 1256, 23500447) in db_state["history_cache"]
+
+    scheduled.clear()
+    r_after_hist = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_after_hist.status_code == 200
+    d_after_hist = r_after_hist.json()
+    assert d_after_hist["history_status"] == "ready"
+    assert d_after_hist["fi_history"] is not None
+    assert d_after_hist["fi_history"]["article"]["page_id"] == 1256
+    assert len(d_after_hist["fi_history"]["sections"]) >= 1
+    assert len(scheduled) == 0
+
+    # history_status == 'none': (a) fi sibling has no SVT history
+    r_no_svt = client.get("/api/summary/fi/777?ui=sv")
+    assert r_no_svt.status_code == 200
+    assert r_no_svt.json()["history_status"] == "none"
+    assert r_no_svt.json()["fi_history"] is None
+
+    # history_status == 'none': (b) no fi sibling
+    r_no_fi_sib = client.get("/api/summary/sv/999?ui=en")
+    assert r_no_fi_sib.status_code == 200
+    assert r_no_fi_sib.json()["history_status"] == "none"
+    assert r_no_fi_sib.json()["fi_history"] is None
+
+
+def test_summary_translated_build_and_validate(monkeypatch):
+    art_text = _make_long_article("Suomi 1980-luvulla", num_sections=4)
+    default_payload = {
+        "article": {
+            "lang": "fi",
+            "page_id": 966363,
+            "wikidata_id": "Q18693692",
+            "title": "Suomi 1980-luvulla",
+            "url": "https://fi.wikipedia.org/wiki/Suomi_1980-luvulla",
+            "words": 5000,
+            "reading_minutes": 21,
+            "has_history": True,
+        },
+        "mode": "llm",
+        "out_lang": "fi",
+        "rev_id": 24001001,
+        "tldr": "Suomen 1980-luku oli kasvun aikaa.",
+        "facts": [
+            {"label": "Aika", "value": "1980–1989", "source": "Lähde 0."},
+            {"label": "Kasvu", "value": "Voimakas", "source": "Kasvu oli vahvaa."},
+        ],
+        "sections": [
+            {
+                "no": 1,
+                "heading": "OtsikkoYksi",
+                "words": 300,
+                "reading_minutes": 2,
+                "one_line": "Toistuva teksti.",
+                "summary": "Talous kasvoi nopeasti.",
+                "facts": [{"label": "Aika", "value": "1980-luku", "source": "Lähde 1."}],
+                "text": "Raakateksti 1",
+                "history": {"added_year": 2006, "changes": 10, "war_years": []},
+            },
+            {
+                "no": 2,
+                "heading": "Politiikka",
+                "words": 300,
+                "reading_minutes": 2,
+                "one_line": "Toistuva teksti.",
+                "summary": "Politiikassa tapahtui muutoksia.",
+                "facts": [],
+                "text": "Raakateksti 2",
+                "history": {"added_year": 2006, "changes": 4, "war_years": [2009]},
+            },
+            {
+                "no": 3,
+                "heading": "Kulttuuri",
+                "words": 300,
+                "reading_minutes": 2,
+                "one_line": "Kulttuuri kukoisti.",
+                "summary": "Musiikki ja elokuva kehittyivät.",
+                "facts": [],
+                "text": "Raakateksti 3",
+                "history": None,
+            },
+            {
+                "no": 4,
+                "heading": "Urheilu",
+                "words": 300,
+                "reading_minutes": 2,
+                "one_line": "Urheilu menestyi.",
+                "summary": "Suomi sai mitaleja.",
+                "facts": [],
+                "text": "Raakateksti 4",
+                "history": None,
+            },
+        ],
+        "ghost_sections": [
+            {"after_no": 1, "heading": "Haamu A", "from_year": 2007, "removed_year": 2012, "text": "Haamuteksti A", "oldid": 111},
+            {"after_no": 3, "heading": "Haamu B", "from_year": 2008, "removed_year": 2014, "text": "Haamuteksti B", "oldid": 222},
+        ],
+    }
+    default_json = json.dumps(default_payload, separators=(",", ":"), ensure_ascii=False)
+    db_state = {
+        "articles": {
+            ("fi", 966363): (
+                "fi",
+                966363,
+                24001001,
+                "Q18693692",
+                "Suomi 1980-luvulla",
+                "https://fi.wikipedia.org/wiki/Suomi_1980-luvulla",
+                art_text,
+            )
+        },
+        "cache": {("fi", 966363, 24001001, ""): default_json},
+        "cache_hashes": {},
+        "history_cache": {},
+        "svt_current": {},
+        "svt_first": {},
+        "svt_snaps": {},
+    }
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_open_svt", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_cache_table_ready", False)
+
+    # Normal build with repeated strings ("Toistuva teksti." & "Aika")
+    fake_client = _make_fake_translate_client(
+        lambda items_in, _kw: [{"id": it["id"], "text": f"SV:{it['text']}"} for it in items_in]
+    )
+    built, stats, from_cache = summary.build_and_cache_llm_summary("fi", 966363, ui="sv", llm_client=fake_client)
+    assert from_cache is False
+    assert built["out_lang"] == "sv"
+    assert built["variant"] == "translated"
+    assert built["history_status"] == "ready"
+    assert built["requested"]["page_id"] == 966363
+    assert stats.total_calls == 1
+    assert stats.failed_calls == 0
+
+    # (b) No source/heading/text/ghost text sent to translator
+    user_msg = fake_client.recorded_calls[0]["messages"][0]["content"]
+    assert fake_client.recorded_calls[0]["max_tokens"] == 16000
+    for forbidden in ["Lähde 0.", "Kasvu oli vahvaa.", "Lähde 1.", "OtsikkoYksi", "Raakateksti 1", "Haamuteksti A", "Haamuteksti B"]:
+        assert forbidden not in user_msg
+    # (c) Repeated string sent once
+    start = user_msg.index("<strings>\n") + len("<strings>\n")
+    end = user_msg.index("\n</strings>")
+    sent_texts = [x["text"] for x in json.loads(user_msg[start:end])]
+    assert sent_texts.count("Toistuva teksti.") == 1
+    assert sent_texts.count("Aika") == 1
+    assert built["sections"][0]["one_line"] == "SV:Toistuva teksti."
+    assert built["sections"][1]["one_line"] == "SV:Toistuva teksti."
+
+    # (a) Structural deep equality ignoring translated strings & envelope fields
+    def _strip_translated(p):
+        c = json.loads(json.dumps(p))
+        for k in ("out_lang", "variant", "requested", "history_status", "tldr"):
+            c.pop(k, None)
+        for f in c.get("facts", []):
+            f.pop("label", None)
+            f.pop("value", None)
+        for s in c.get("sections", []):
+            s.pop("one_line", None)
+            s.pop("summary", None)
+            for f in s.get("facts", []):
+                f.pop("label", None)
+                f.pop("value", None)
+        return c
+
+    assert _strip_translated(built) == _strip_translated(default_payload)
+    # (f) Written source_hash matches stored default row
+    assert db_state["cache_hashes"][("fi", 966363, 24001001, "sv")] == summary.source_hash(default_json)
+
+    # (d) Partial empty fallback: only that string keeps original
+    partial_client = _make_fake_translate_client(
+        lambda items_in, _kw: [
+            {"id": it["id"], "text": "" if it["id"] == "t0" else f"SV2:{it['text']}"}
+            for it in items_in
+        ]
+    )
+    built_p, stats_p, _ = summary.build_and_cache_llm_summary("fi", 966363, force=True, ui="sv", llm_client=partial_client)
+    assert stats_p.translate_fallbacks == 1
+    assert built_p["tldr"] == default_payload["tldr"]
+    assert built_p["sections"][0]["one_line"] == "SV2:Toistuva teksti."
+    # (g) Default row unchanged even with force=True
+    assert db_state["cache"][("fi", 966363, 24001001, "")] == default_json
+
+    # (e) None / unparseable LLM response -> no write, failed_calls==1
+    del db_state["cache"][("fi", 966363, 24001001, "sv")]
+    none_client = _make_fake_translate_client(lambda _items, _kw: None)
+    res_none, stats_none, _ = summary.build_and_cache_llm_summary("fi", 966363, ui="sv", llm_client=none_client)
+    assert stats_none.failed_calls == 1
+    assert res_none["tldr"] == default_payload["tldr"]
+    assert ("fi", 966363, 24001001, "sv") not in db_state["cache"]
+
+
+def test_summary_staleness_and_background_rebuild(monkeypatch):
+    art_text = _make_long_article("Suomi 1980-luvulla", num_sections=4)
+    default_v1 = {
+        "article": {"lang": "fi", "page_id": 966363, "wikidata_id": "Q1", "title": "Suomi 1980-luvulla", "url": "https://fi.wikipedia.org/wiki/Suomi_1980-luvulla", "words": 5000, "reading_minutes": 21, "has_history": False},
+        "mode": "llm",
+        "out_lang": "fi",
+        "rev_id": 24001001,
+        "tldr": "Versio 1.",
+        "facts": [],
+        "sections": [],
+        "ghost_sections": [],
+    }
+    default_v2 = {**default_v1, "tldr": "Versio 2."}
+    default_v1_json = json.dumps(default_v1, separators=(",", ":"), ensure_ascii=False)
+    default_v2_json = json.dumps(default_v2, separators=(",", ":"), ensure_ascii=False)
+    sv_row = {
+        **default_v1,
+        "out_lang": "sv",
+        "variant": "translated",
+        "history_status": "none",
+        "requested": {"lang": "fi", "page_id": 966363, "title": "Suomi 1980-luvulla", "url": "https://fi.wikipedia.org/wiki/Suomi_1980-luvulla"},
+        "tldr": "Version 1 på svenska.",
+    }
+    sv_row_json = json.dumps(sv_row, separators=(",", ":"), ensure_ascii=False)
+
+    db_state = {
+        "articles": {("fi", 966363): ("fi", 966363, 24001001, "Q1", "Suomi 1980-luvulla", "https://fi.wikipedia.org/wiki/Suomi_1980-luvulla", art_text)},
+        "cache": {
+            ("fi", 966363, 24001001, ""): default_v1_json,
+            ("fi", 966363, 24001001, "sv"): sv_row_json,
+        },
+        "cache_hashes": {
+            ("fi", 966363, 24001001, "sv"): summary.source_hash(default_v1_json),
+        },
+        "history_cache": {},
+        "svt_current": {},
+        "svt_first": {},
+        "svt_snaps": {},
+    }
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_open_svt", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_cache_table_ready", False)
+    summary._inflight_jobs.clear()
+
+    scheduled: list[tuple] = []
+    monkeypatch.setenv("SUMMARY_LLM", "1")
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, fn, *args: scheduled.append((fn, args)))
+    client = TestClient(main.app)
+
+    # Fresh -> verbatim, 0 jobs
+    r_fresh = client.get("/api/summary/fi/966363?ui=sv")
+    assert r_fresh.status_code == 200
+    assert r_fresh.content == sv_row_json.encode("utf-8")
+    assert len(scheduled) == 0
+
+    # Stale via changed default hash (simulate regenerated '' row or wrong hash)
+    db_state["cache"][("fi", 966363, 24001001, "")] = default_v2_json
+    r_stale = client.get("/api/summary/fi/966363?ui=sv")
+    assert r_stale.status_code == 200
+    d_stale = r_stale.json()
+    assert d_stale["variant"] == "fallback"
+    assert d_stale["out_lang"] == "fi"
+    assert d_stale["tldr"] == "Versio 2."
+    assert len(scheduled) == 1
+    assert scheduled[0][1][0] == ("fi", 966363, 24001001, "sv")
+
+    # Also stale when source_hash is NULL
+    summary._inflight_jobs.clear()
+    scheduled.clear()
+    db_state["cache_hashes"][("fi", 966363, 24001001, "sv")] = None
+    r_null_hash = client.get("/api/summary/fi/966363?ui=sv")
+    assert r_null_hash.json()["variant"] == "fallback"
+    assert len(scheduled) == 1
+
+    # Run scheduled background worker with fake LLM -> next GET is fresh translated
+    rebuild_client = _make_fake_translate_client(
+        lambda items_in, _kw: [{"id": it["id"], "text": "Version 2 på svenska."} for it in items_in]
+    )
+    fn, args = scheduled[0]
+    fn(args[0], rebuild_client)
+
+    scheduled.clear()
+    r_rebuilt = client.get("/api/summary/fi/966363?ui=sv")
+    assert r_rebuilt.status_code == 200
+    assert r_rebuilt.json()["variant"] == "translated"
+    assert r_rebuilt.json()["out_lang"] == "sv"
+    assert r_rebuilt.json()["tldr"] == "Version 2 på svenska."
+    assert db_state["cache_hashes"][("fi", 966363, 24001001, "sv")] == summary.source_hash(default_v2_json)
+    assert len(scheduled) == 0
+

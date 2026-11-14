@@ -780,42 +780,7 @@ export function createGalaxyScene({
     return { camPos, lookTarget };
   }
 
-  function enterSummaryTrail({ star, items = [] } = {}) {
-    if (!star || !items.length) return;
-    if (inRoadMode) {
-      exitRoadMode();
-    }
-
-    // Save pre-trail camera to restore on "Back to the sky"
-    savedSummaryCamPos.copy(camera.position);
-    savedSummaryTarget.copy(controls.target);
-
-    // Orientation built relative to the CAMERA at the moment of entry
-    camera.getWorldDirection(summaryForward).normalize();
-    summaryRight.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-    summaryUp.crossVectors(summaryRight, summaryForward).normalize();
-
-    summaryOriginStar = star;
-    summaryOriginPos.copy(getStarCurrentPos(star));
-    selectedStar = star;
-    refreshHighlights();
-
-    inSummaryMode = true;
-    summaryFocusIdx = 0;
-    summaryEnterTime = performance.now();
-    glideActive = false;
-    curveGlide = null;
-
-    threadsGroup.visible = false;
-    constellationGroup.visible = false;
-    historyGuideGroup.visible = false;
-    geographyGuideGroup.visible = false;
-    material.uniforms.uSummaryModeMix.value = 1.0;
-
-    controls.enableRotate = false;
-    controls.enablePan = false;
-    controls.enableZoom = false;
-
+  function buildSummaryTrailObjects(items = [], { focusIdx = 0, immediate = false } = {}) {
     disposeGroupChildren(summaryTrailGroup);
     clearCss3dScene();
 
@@ -824,7 +789,7 @@ export function createGalaxyScene({
     const ZIGZAG_OFFSET = 2.65;
     const GHOST_OFFSET = 3.95;
     const totalCount = items.length;
-    const staggerMs = totalCount > 1 ? Math.min(60, Math.floor(620 / (totalCount - 1))) : 0;
+    const staggerMs = !immediate && totalCount > 1 ? Math.min(60, Math.floor(620 / (totalCount - 1))) : 0;
 
     const spinePoints = [];
     const sampleSteps = Math.max(24, totalCount * 6);
@@ -838,7 +803,7 @@ export function createGalaxyScene({
     }
     const spineGeo = new THREE.BufferGeometry().setFromPoints(spinePoints);
     summarySpinePointCount = spinePoints.length;
-    if (!reducedMotion) {
+    if (!reducedMotion && !immediate) {
       spineGeo.setDrawRange(0, 2);
     }
     const spineMat = new THREE.LineBasicMaterial({
@@ -878,20 +843,21 @@ export function createGalaxyScene({
       }
 
       const cssObj = new CSS3DObject(item.element);
-      cssObj.position.copy(reducedMotion ? anchorPos : summaryOriginPos);
+      const startAtAnchor = reducedMotion || immediate;
+      cssObj.position.copy(startAtAnchor ? anchorPos : summaryOriginPos);
       cssObj.quaternion.copy(camera.quaternion);
-      cssObj.visible = idx !== 0;
+      cssObj.visible = idx !== focusIdx;
       css3dScene.add(cssObj);
 
       return {
         index: idx,
         kind: item.kind,
         anchorPos,
-        currentPos: (reducedMotion ? anchorPos : summaryOriginPos).clone(),
+        currentPos: (startAtAnchor ? anchorPos : summaryOriginPos).clone(),
         cssObj,
         element: item.element,
-        delayMs: reducedMotion ? 0 : idx * staggerMs,
-        unfoldDurMs: reducedMotion ? 0 : 220,
+        delayMs: startAtAnchor ? 0 : idx * staggerMs,
+        unfoldDurMs: startAtAnchor ? 0 : 220,
       };
     });
 
@@ -911,8 +877,53 @@ export function createGalaxyScene({
       css3dLayer.hidden = false;
     }
 
-    setSummaryFocusIndex(0);
+    setSummaryFocusIndex(focusIdx);
     computeProjectedLabels();
+  }
+
+  function enterSummaryTrail({ star, items = [] } = {}) {
+    if (!star || !items.length) return;
+    if (inRoadMode) {
+      exitRoadMode();
+    }
+
+    // Save pre-trail camera to restore on "Back to the sky"
+    savedSummaryCamPos.copy(camera.position);
+    savedSummaryTarget.copy(controls.target);
+
+    // Orientation built relative to the CAMERA at the moment of entry
+    camera.getWorldDirection(summaryForward).normalize();
+    summaryRight.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    summaryUp.crossVectors(summaryRight, summaryForward).normalize();
+
+    summaryOriginStar = star;
+    summaryOriginPos.copy(getStarCurrentPos(star));
+    selectedStar = star;
+    refreshHighlights();
+
+    inSummaryMode = true;
+    summaryFocusIdx = 0;
+    summaryEnterTime = performance.now();
+    glideActive = false;
+    curveGlide = null;
+
+    threadsGroup.visible = false;
+    constellationGroup.visible = false;
+    historyGuideGroup.visible = false;
+    geographyGuideGroup.visible = false;
+    material.uniforms.uSummaryModeMix.value = 1.0;
+
+    controls.enableRotate = false;
+    controls.enablePan = false;
+    controls.enableZoom = false;
+
+    buildSummaryTrailObjects(items, { focusIdx: 0, immediate: reducedMotion });
+  }
+
+  function updateSummaryTrailItems(items = [], focusIdx = 0) {
+    if (!inSummaryMode || !items.length) return;
+    const clampedFocus = Math.max(0, Math.min(items.length - 1, Number(focusIdx) || 0));
+    buildSummaryTrailObjects(items, { focusIdx: clampedFocus, immediate: true });
   }
 
   function setSummaryFocusIndex(idx) {
@@ -2920,6 +2931,7 @@ export function createGalaxyScene({
       }
     },
     enterSummaryTrail,
+    updateSummaryTrailItems,
     setSummaryFocusIndex,
     exitSummaryTrail,
     isSummaryTrailMode() {

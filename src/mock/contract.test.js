@@ -464,11 +464,11 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
     assert.equal(typeof f.source, "string");
     assert.ok(f.source.length > 0);
   };
-  const assertLongSummaryShape = (sum, expectedTitle) => {
+  const assertLongSummaryShape = (sum, expectedTitle, { expectHistory = true } = {}) => {
     assert.equal(sum.article.title, expectedTitle);
     assert.ok(sum.article.words >= 1500);
     assert.ok(sum.article.reading_minutes >= 1);
-    assert.equal(sum.article.has_history, true);
+    assert.equal(sum.article.has_history, expectHistory);
     assert.equal(typeof sum.rev_id, "number");
     assert.ok(typeof sum.tldr === "string" && sum.tldr.length > 0);
     assert.ok(Array.isArray(sum.facts) && sum.facts.length <= 3);
@@ -511,9 +511,13 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
         assert.ok(!sec.summary.includes("[mock]"));
         assert.ok(!sec.text.includes("[mock]"));
       }
-      assert.ok(sec.history && typeof sec.history.added_year === "number");
-      assert.equal(typeof sec.history.changes, "number");
-      assert.ok(Array.isArray(sec.history.war_years));
+      if (expectHistory) {
+        assert.ok(sec.history && typeof sec.history.added_year === "number");
+        assert.equal(typeof sec.history.changes, "number");
+        assert.ok(Array.isArray(sec.history.war_years));
+      } else {
+        assert.equal(sec.history, null);
+      }
     });
 
     assert.ok(Array.isArray(sum.ghost_sections));
@@ -594,25 +598,70 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
   assert.deepEqual(shortSummary.sections, []);
   assert.deepEqual(shortSummary.ghost_sections, []);
 
-  // 5. Translated summary (?ui=sv for fi:1256) returns out_lang="sv" and preserves Finnish source sentences
-  const talviSv = await getSummary("fi", 1256, "sv");
-  assertLongSummaryShape(talviSv, "Talvisota");
-  assert.equal(talviSv.out_lang, "sv");
-  if (MOCK.summary) {
-    assert.ok(talviSv.tldr.includes("[mock] (sv)"));
-  } else {
-    assert.equal(talviSv.mode, "llm");
-    const apiBase = (process.env.API_BASE || "").replace(/\/+$/, "");
-    const artRes = await fetch(`${apiBase}/api/article/fi/1256`);
-    assert.equal(artRes.status, 200);
-    const artJson = await artRes.json();
-    const normArt = normWs(artJson.text);
-    for (const f of talviSv.facts) {
-      assert.ok(
-        normArt.includes(normWs(f.source)),
-        `Translated sv summary top-level fact source for fi:1256 not found in original Finnish text: ${f.source}`
-      );
+  // 5. Native sibling switch (?ui=sv, ?ui=en for fi:1256) returns native sv/en summary + fi_history + history_status
+  const expectedTitles = { sv: "Vinterkriget", en: "Winter War" };
+  for (const targetUi of ["sv", "en"]) {
+    const natRes = await getSummary("fi", 1256, targetUi);
+    assertLongSummaryShape(natRes, expectedTitles[targetUi], { expectHistory: false });
+    assert.equal(natRes.variant, "native");
+    assert.equal(natRes.article.lang, targetUi);
+    assert.notEqual(natRes.article.page_id, 1256);
+    assert.equal(natRes.requested.page_id, 1256);
+    assert.equal(natRes.out_lang, targetUi);
+    assert.ok(["ready", "building", "none"].includes(natRes.history_status));
+    if (!MOCK.summary) {
+      assert.equal(natRes.mode, "llm");
+      assert.equal(natRes.history_status, "ready");
+      const apiBase = (process.env.API_BASE || "").replace(/\/+$/, "");
+      const artRes = await fetch(`${apiBase}/api/article/${targetUi}/${natRes.article.page_id}`);
+      assert.equal(artRes.status, 200);
+      const artJson = await artRes.json();
+      const normArt = normWs(artJson.text);
+      for (const f of natRes.facts) {
+        assert.ok(
+          normArt.includes(normWs(f.source)),
+          `Native ${targetUi} summary top-level fact source not found in ${targetUi}:${natRes.article.page_id}: ${f.source}`
+        );
+      }
+      assert.ok(natRes.fi_history && natRes.fi_history.article.page_id === 1256);
+      assert.ok(Array.isArray(natRes.fi_history.ghost_sections) && natRes.fi_history.ghost_sections.length >= 1);
+    } else {
+      assert.ok(natRes.tldr.includes("[mock]"));
+      assert.equal(natRes.history_status, "ready");
+      assert.ok(natRes.fi_history && natRes.fi_history.article.page_id === 1256);
     }
+  }
+
+  // 6. Translated summary (?ui=sv for untranslated history article T)
+  // Per coordinator decision: mock uses 306897 via mock fixtures (no edit to src/mock/stars.js); real uses 966363 ('Suomi 1980-luvulla')
+  const untranslatedPid = MOCK.summary ? 306897 : 966363;
+  const tDefault = await getSummary("fi", untranslatedPid);
+  const tSv = await getSummary("fi", untranslatedPid, "sv");
+  assert.equal(tSv.variant, "translated");
+  assert.equal(tSv.out_lang, "sv");
+  assert.equal(tSv.article.lang, "fi");
+  assert.ok(["ready", "building", "none"].includes(tSv.history_status));
+  assert.equal(tSv.rev_id, tDefault.rev_id);
+  assert.equal(tSv.sections.length, tDefault.sections.length);
+  for (let i = 0; i < tDefault.sections.length; i++) {
+    assert.equal(tSv.sections[i].no, tDefault.sections[i].no);
+    assert.equal(tSv.sections[i].heading, tDefault.sections[i].heading);
+    assert.equal(tSv.sections[i].text, tDefault.sections[i].text);
+    assert.deepEqual(tSv.sections[i].history, tDefault.sections[i].history);
+    assert.deepEqual(
+      (tSv.sections[i].facts || []).map((f) => f.source),
+      (tDefault.sections[i].facts || []).map((f) => f.source)
+    );
+  }
+  assert.deepEqual(tSv.ghost_sections, tDefault.ghost_sections);
+  assert.deepEqual(
+    (tSv.facts || []).map((f) => f.source),
+    (tDefault.facts || []).map((f) => f.source)
+  );
+  if (MOCK.summary) {
+    assert.ok(tSv.tldr.includes("[mock] (sv)"));
+  } else {
+    assert.equal(tSv.mode, "llm");
   }
 });
 

@@ -811,15 +811,87 @@ export async function mockGetSummary(lang = "fi", pageId = 1256, ui = null) {
         (s) => !(s.lang === star.lang && s.page_id === star.page_id)
       )
     : [];
-  const res = buildSummaryForStar(star, rawSiblings);
-  const outLang = ui || star.lang;
-  res.out_lang = outLang;
-  if (ui && ui !== star.lang) {
-    const stripMock = (txt) => String(txt || "").replace(/^\[mock\]\s*/, "");
-    res.tldr = `[mock] (${ui}) ${stripMock(res.tldr)}`;
-    for (const sec of res.sections || []) {
-      sec.one_line = `[mock] (${ui}) ${stripMock(sec.one_line)}`;
-    }
+
+  if (!ui || ui === star.lang) {
+    return buildSummaryForStar(star, rawSiblings);
   }
+
+  const requested = {
+    lang: star.lang,
+    page_id: star.page_id,
+    title: star.title,
+    url: makeWikiUrl(star.lang, star.title),
+  };
+
+  const nativeSibling = rawSiblings.find((s) => s.lang === ui);
+  if (nativeSibling) {
+    const sibSiblings = nativeSibling.wikidata_id
+      ? (byWikidata.get(nativeSibling.wikidata_id) || []).filter(
+          (s) => !(s.lang === nativeSibling.lang && s.page_id === nativeSibling.page_id)
+        )
+      : [];
+    const res = buildSummaryForStar(nativeSibling, sibSiblings);
+    res.out_lang = ui;
+    res.variant = "native";
+    res.requested = requested;
+
+    if (ui === "fi") {
+      res.fi_history = null;
+      const hasInline =
+        (res.sections || []).some((s) => s.history !== null) || (res.ghost_sections || []).length > 0;
+      res.history_status = hasInline || nativeSibling.has_history ? "ready" : "none";
+    } else {
+      const fiStar = star.lang === "fi" ? star : rawSiblings.find((s) => s.lang === "fi");
+      if (fiStar) {
+        const fiSiblings = fiStar.wikidata_id
+          ? (byWikidata.get(fiStar.wikidata_id) || []).filter(
+              (s) => !(s.lang === fiStar.lang && s.page_id === fiStar.page_id)
+            )
+          : [];
+        const fiBuilt = buildSummaryForStar(fiStar, fiSiblings);
+        const sectionsWithHistory = (fiBuilt.sections || [])
+          .filter((s) => s.history !== null)
+          .map((s) => ({ no: s.no, heading: s.heading, history: s.history }));
+        const ghosts = fiBuilt.ghost_sections || [];
+        if (sectionsWithHistory.length > 0 || ghosts.length > 0) {
+          res.fi_history = {
+            article: {
+              lang: fiStar.lang,
+              page_id: fiStar.page_id,
+              title: fiStar.title,
+              url: makeWikiUrl(fiStar.lang, fiStar.title),
+            },
+            rev_id: fiBuilt.rev_id,
+            sections: sectionsWithHistory,
+            ghost_sections: ghosts,
+          };
+          res.history_status = "ready";
+        } else {
+          res.fi_history = null;
+          res.history_status = "none";
+        }
+      } else {
+        res.fi_history = null;
+        res.history_status = "none";
+      }
+    }
+    return res;
+  }
+
+  const res = buildSummaryForStar(star, rawSiblings);
+  const stripMock = (txt) => String(txt || "").replace(/^\[mock\]\s*/, "");
+  res.out_lang = ui;
+  res.variant = "translated";
+  res.requested = requested;
+  res.tldr = `[mock] (${ui}) ${stripMock(res.tldr)}`;
+  for (const sec of res.sections || []) {
+    sec.one_line = `[mock] (${ui}) ${stripMock(sec.one_line)}`;
+  }
+  const hasInlineHistory =
+    star.lang === "fi" &&
+    ((res.sections || []).some((s) => s.history !== null) ||
+      (res.ghost_sections || []).length > 0 ||
+      Boolean(star.has_history));
+  res.history_status = hasInlineHistory ? "ready" : "none";
   return res;
 }

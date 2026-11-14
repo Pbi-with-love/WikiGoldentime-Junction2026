@@ -440,6 +440,22 @@ async function init() {
       sceneCtrl?.setThreads(null, [], currentYear);
       const trailItems = ui.openSummaryTrail(summaryData);
       sceneCtrl?.enterSummaryTrail({ star, items: trailItems });
+
+      if (summaryData.history_status === "building") {
+        setTimeout(async () => {
+          if (seq !== summaryLoadSeq || !ui.isSummaryTrailOpen()) return;
+          try {
+            const refreshed = await getSummary(lang, page_id, uiLang);
+            if (seq !== summaryLoadSeq || !ui.isSummaryTrailOpen()) return;
+            const updated = ui.updateSummaryTrail(refreshed);
+            if (updated?.items?.length) {
+              sceneCtrl?.updateSummaryTrailItems(updated.items, updated.focusIdx);
+            }
+          } catch (_) {
+            // Single best-effort re-fetch when history was building; leave current card intact on error
+          }
+        }, 1500);
+      }
     } catch (err) {
       if (seq !== summaryLoadSeq) return;
       ui.setLoading(false);
@@ -500,7 +516,8 @@ async function init() {
       const targetYear = Math.round(options.asofYear ?? currentYear);
       const [article, threadsRes] = await Promise.all([
         getArticle(lang, pageId),
-        getThreads(lang, pageId),
+        // Threads are optional mock fixtures; missing non-fixture stars must not block opening Dataset M/S articles.
+        getThreads(lang, pageId).catch(() => ({ threads: [] })),
       ]);
       if (articleSeq !== articleLoadSeq) return;
 

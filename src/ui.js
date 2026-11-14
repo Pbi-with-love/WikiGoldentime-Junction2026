@@ -1698,6 +1698,10 @@ export function createUI({
     const revId = summaryData.rev_id ?? art.rev_id ?? null;
     const mode = summaryData.mode || "extractive";
     const outLang = summaryData.out_lang ?? null;
+    const variant = summaryData.variant ?? null;
+    const requested = summaryData.requested ?? null;
+    const historyStatus = summaryData.history_status ?? null;
+    const fiHistory = summaryData.fi_history ?? null;
 
     const items = [
       {
@@ -1707,6 +1711,8 @@ export function createUI({
         revId,
         mode,
         outLang,
+        variant,
+        requested,
         tldr: summaryData.tldr || "",
         facts: (summaryData.facts || []).slice(0, 3),
         summaryMinutes,
@@ -1725,6 +1731,8 @@ export function createUI({
             revId,
             mode,
             outLang,
+            variant,
+            fromFi: art.lang === "fi",
             totalSections: sections.length,
           });
         }
@@ -1741,6 +1749,7 @@ export function createUI({
         revId,
         mode,
         outLang,
+        variant,
         totalSections: sections.length,
       });
       pushGhostsAfter(sec.no);
@@ -1756,10 +1765,59 @@ export function createUI({
           revId,
           mode,
           outLang,
+          variant,
+          fromFi: art.lang === "fi",
           totalSections: sections.length,
         });
       }
     }
+
+    if (fiHistory) {
+      items.push({
+        kind: "fiHistory",
+        index: items.length,
+        fiHistory,
+        building: false,
+        article: art,
+        requested,
+        variant,
+        revId,
+        mode,
+        outLang,
+        totalSections: sections.length,
+      });
+      const fiArt = fiHistory.article || art;
+      const fiRevId = fiHistory.rev_id ?? revId;
+      for (const g of fiHistory.ghost_sections || []) {
+        items.push({
+          kind: "ghost",
+          index: items.length,
+          ghost: g,
+          article: fiArt,
+          revId: fiRevId,
+          mode,
+          outLang,
+          variant,
+          fromFi: true,
+          totalSections: sections.length,
+        });
+      }
+    } else if (historyStatus === "building") {
+      items.push({
+        kind: "fiHistory",
+        index: items.length,
+        fiHistory: null,
+        building: true,
+        article: art,
+        requested,
+        variant,
+        revId,
+        mode,
+        outLang,
+        totalSections: sections.length,
+      });
+    }
+
     return { items, summaryMinutes };
   }
 
@@ -1802,6 +1860,8 @@ export function createUI({
       const label =
         item.kind === "overview"
           ? art.title || t("panel.overview")
+          : item.kind === "fiHistory"
+            ? item.fiHistory?.article?.title || t("summary.fiHistoryLabel")
           : item.kind === "ghost"
             ? t("summary.ghostShort", {
                 year: item.ghost.removed_year,
@@ -1812,14 +1872,23 @@ export function createUI({
     }
 
     const effectiveOutLang = item.outLang || artLang;
-    const isFallback = effectiveOutLang !== uiLang;
-    const isTranslated = item.mode === "llm" && effectiveOutLang === uiLang && effectiveOutLang !== artLang;
+    const isNative = item.variant === "native";
+    const isTranslated =
+      !isNative &&
+      (item.variant === "translated" ||
+        (item.mode === "llm" && effectiveOutLang === uiLang && effectiveOutLang !== artLang));
+    const isFallback = !isNative && !isTranslated && (item.variant === "fallback" || effectiveOutLang !== uiLang);
+    const mtFromWikiKey = `summary.mtFromWiki.${artLang}`;
+    const mtWikiLabel =
+      artLang === "fi" || artLang === "sv" || artLang === "en" ? t(mtFromWikiKey) : mtFromLabel([artLang]);
     const provenanceHtml =
       isFocused && isFallback
         ? `<p class="i18n-fallback-note">${escapeHtml(fallbackNoteText(effectiveOutLang))}</p>`
-        : !isFallback && isTranslated
-        ? `<div class="mt-label">${escapeHtml(mtFromLabel([artLang]))}</div>`
-        : "";
+        : !isFallback && isNative && item.kind === "overview"
+          ? `<div class="mt-label">${escapeHtml(t("summary.nativeLabel"))}</div>`
+          : !isFallback && isTranslated
+            ? `<div class="mt-label">${escapeHtml(mtWikiLabel)}</div>`
+            : "";
 
     if (item.kind === "overview") {
       const readMins = art.reading_minutes || 1;
@@ -1847,8 +1916,69 @@ export function createUI({
       `;
     }
 
+    if (item.kind === "fiHistory") {
+      if (item.building) {
+        const headingText = item.requested?.title || art.title || t("summary.fiHistoryLabel");
+        return `
+          <div class="summary-trail-kicker">
+            <span class="summary-trail-kicker-left"><span class="dot dot-fi"></span>${escapeHtml(
+              t("summary.fiHistoryLabel")
+            )}</span>
+          </div>
+          <h3 class="summary-trail-title">${escapeHtml(headingText)}</h3>
+          <div class="mt-label">${escapeHtml(t("summary.fiHistoryLabel"))}</div>
+          <p class="i18n-fallback-note summary-history-loading">${escapeHtml(t("summary.historyBuilding"))}</p>
+        `;
+      }
+      const fh = item.fiHistory || {};
+      const fiArt = fh.article || {};
+      const fiTitle = fiArt.title || t("summary.fiHistoryLabel");
+      const fiUrl = fiArt.url || "";
+      const fiSections = Array.isArray(fh.sections) ? fh.sections : [];
+      const titleHtml = fiUrl
+        ? `<a class="summary-fi-history-link" href="${escapeHtml(fiUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+            fiTitle
+          )}</a>`
+        : escapeHtml(fiTitle);
+      const rowsHtml = fiSections
+        .map((s) => {
+          const hist = s.history || {};
+          const hasWars = Array.isArray(hist.war_years) && hist.war_years.length > 0;
+          const badgeHtml = `
+            <span class="summary-history-badge">${
+              hasWars ? `<span class="dot dot-war" title="${escapeHtml(t("summary.editWarTitle"))}"></span>` : ""
+            }${escapeHtml(
+              t("summary.rewrittenTimes", {
+                count: hist.changes || 0,
+                formattedCount: fmtNumber(hist.changes || 0),
+              })
+            )}</span>
+          `;
+          return `
+            <li class="summary-fi-history-row">
+              <span class="summary-fi-history-heading" lang="fi">${escapeHtml(s.heading || "")}</span>
+              ${badgeHtml}
+            </li>
+          `;
+        })
+        .join("");
+      return `
+        <div class="summary-trail-kicker">
+          <span class="summary-trail-kicker-left"><span class="dot dot-fi"></span>${escapeHtml(
+            t("summary.fiHistoryLabel")
+          )}</span>
+          <span class="summary-trail-kicker-right">${escapeHtml(fmtNumber(fiSections.length))}</span>
+        </div>
+        <h3 class="summary-trail-title" lang="fi">${titleHtml}</h3>
+        <div class="mt-label">${escapeHtml(t("summary.fiHistoryLabel"))}</div>
+        ${rowsHtml ? `<ul class="summary-fi-history-list">${rowsHtml}</ul>` : ""}
+      `;
+    }
+
     if (item.kind === "ghost") {
       const g = item.ghost;
+      const ghostProvenanceHtml =
+        uiLang !== "fi" ? `<div class="mt-label">${escapeHtml(t("summary.fiHistoryLabel"))}</div>` : "";
       const bodyHtml =
         isFocused && readMoreOpen
           ? `
@@ -1872,6 +2002,7 @@ export function createUI({
           <span class="summary-trail-kicker-right">${escapeHtml(g.from_year)}–${escapeHtml(g.removed_year)}</span>
         </div>
         <h3 class="summary-trail-title">${escapeHtml(g.heading)}</h3>
+        ${ghostProvenanceHtml}
         <p class="summary-trail-oneline">${
           isFocused
             ? formatInlineMd(g.text || "")
@@ -2004,6 +2135,8 @@ export function createUI({
           totalSections > 0
             ? t("summary.progressOverview", { count: totalSections })
             : t("summary.progressOverviewSingle");
+      } else if (currentItem.kind === "fiHistory") {
+        summaryProgressText.textContent = t("summary.fiHistoryLabel");
       } else if (currentItem.kind === "ghost") {
         summaryProgressText.textContent = t("scene.sectionRemoved", {
           year: currentItem.ghost.removed_year,
@@ -2030,15 +2163,8 @@ export function createUI({
     renderSummaryCardsAndHud();
   }
 
-  function openSummaryTrail(summaryData) {
-    if (!summaryData || !summaryData.article) return [];
-    if (activeRoadState) closeRoadView();
-
-    const { items, summaryMinutes } = buildSummaryItems(summaryData);
-    const art = summaryData.article;
-    const totalSections = (summaryData.sections || []).length;
-
-    const cssElements = items.map((item) => {
+  function createSummaryCssElements(items) {
+    return items.map((item) => {
       const el = document.createElement("article");
       el.className = `summary-trail-card summary-css3d-card ${
         item.kind === "ghost" ? "is-ghost-card" : ""
@@ -2050,6 +2176,16 @@ export function createUI({
       });
       return el;
     });
+  }
+
+  function openSummaryTrail(summaryData) {
+    if (!summaryData || !summaryData.article) return [];
+    if (activeRoadState) closeRoadView();
+
+    const { items, summaryMinutes } = buildSummaryItems(summaryData);
+    const art = summaryData.article;
+    const totalSections = (summaryData.sections || []).length;
+    const cssElements = createSummaryCssElements(items);
 
     activeSummaryState = {
       summaryData,
@@ -2088,6 +2224,26 @@ export function createUI({
 
     renderSummaryCardsAndHud();
     return items.map((item, idx) => ({ ...item, element: cssElements[idx] }));
+  }
+
+  function updateSummaryTrail(summaryData) {
+    if (!activeSummaryState || !summaryData || !summaryData.article) return [];
+    const { items, summaryMinutes } = buildSummaryItems(summaryData);
+    const cssElements = createSummaryCssElements(items);
+    const clampedFocus = Math.max(0, Math.min(items.length - 1, activeSummaryState.focusIdx));
+    activeSummaryState = {
+      summaryData,
+      items,
+      focusIdx: clampedFocus,
+      readMoreOpen: false,
+      cssElements,
+      summaryMinutes,
+    };
+    renderSummaryCardsAndHud();
+    return {
+      items: items.map((item, idx) => ({ ...item, element: cssElements[idx] })),
+      focusIdx: clampedFocus,
+    };
   }
 
   function updateSummaryFocusScreen({ visible = false, x = 0, y = 0, opacity = 1, scale = 1 } = {}) {
@@ -2542,6 +2698,7 @@ export function createUI({
     openGhostStation,
     closeRoadView,
     openSummaryTrail,
+    updateSummaryTrail,
     updateSummaryFocusScreen,
     closeSummaryTrail,
     isSummaryTrailOpen() {

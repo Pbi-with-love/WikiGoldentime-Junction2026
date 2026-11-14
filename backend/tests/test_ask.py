@@ -36,15 +36,24 @@ class FakeCursor:
             self.description = []
             self._rows = []
             return
+        if s.startswith("SELECT (SELECT json FROM wikirag.answer_cache"):
+            u_hash_q, _u_hash_h, d_hash_q = params
+            u_json = self.store["cache"].get(u_hash_q)
+            u_src_hash = self.store.get("cache_hashes", {}).get(u_hash_q)
+            d_json = self.store["cache"].get(d_hash_q)
+            self.description = [("u_json",), ("u_source_hash",), ("d_json",)]
+            self._rows = [(u_json, u_src_hash, d_json)]
+            return
         if s.startswith("SELECT json FROM wikirag.answer_cache"):
             row = self.store["cache"].get(params[0])
             self.description = [("json",)]
             self._rows = [(row,)] if row is not None else []
             return
         if s.startswith("INSERT INTO wikirag.answer_cache"):
-            q_hash, q_text, ui_val, serialized, _model = params
+            q_hash, q_text, ui_val, src_hash, serialized, _model = params
             self.store["cache"][q_hash] = serialized
             self.store.setdefault("cache_ui", {})[q_hash] = ui_val
+            self.store.setdefault("cache_hashes", {})[q_hash] = src_hash
             self.store["cache_queries"].append(q_text)
             self.description = []
             self._rows = []
@@ -1599,7 +1608,7 @@ def test_b1_ui_translate_only_unit_cases():
     assert fi_hash not in store["cache"]
     assert store["cache"][default_hash] == default_json
 
-    # (g) question_lang on hero questions + A3 same-language 0-call path
+    # (g) question_lang on hero questions + B5 rule: ui='en' STILL makes 1 batched translation call
     assert ask.question_lang("How did the Winter War end?") == "en"
     assert ask.question_lang("Miten talvisota päättyi?") == "fi"
     assert ask.question_lang("Hur slutade vinterkriget?") == "sv"
@@ -1607,17 +1616,20 @@ def test_b1_ui_translate_only_unit_cases():
     assert ask.question_lang("koko") is None
     assert ask.question_lang("Talvisota") is None
 
-    client_unused = _make_fake_llm_client([])
+    unique_en = ask.collect_translatable(default)
+    client_en_ui = _make_fake_llm_client(
+        [{"items": [{"id": f"t{i}", "text": txt} for i, txt in enumerate(unique_en)]}]
+    )
     variant_en, stats_en = ask.build_and_cache_ask(
         q=q_en,
         force=True,
         ui="en",
         rag_opener=lambda: FakeConnection(store),
-        llm_client=client_unused,
+        llm_client=client_en_ui,
         embed_fn=fail_embed,
     )
-    assert len(client_unused.recorded_calls) == 0
-    assert stats_en.total_llm_calls == 0
+    assert len(client_en_ui.recorded_calls) == 1
+    assert stats_en.total_llm_calls == 1
     assert stats_en.history_llm_calls == 0
     assert stats_en.translate_fallbacks == 0
     assert variant_en["out_lang"] == "en"
@@ -1626,20 +1638,24 @@ def test_b1_ui_translate_only_unit_cases():
     assert en_hash in store["cache"]
     assert store["cache"][default_hash] == default_json
 
-    # Also check A3 with Finnish question and ui="fi" -> localizes no-answer milestone with 0 calls
+    # Also check B5 with Finnish question and ui="fi" -> makes 1 call and localizes no-answer milestone
     q_fi = "Miten talvisota päättyi?"
     fi_def_hash = ask.question_hash(q_fi)
     store["cache"][fi_def_hash] = default_json
+    unique_fi = ask.collect_translatable(default)
+    client_fi_ui = _make_fake_llm_client(
+        [{"items": [{"id": f"t{i}", "text": txt} for i, txt in enumerate(unique_fi)]}]
+    )
     variant_fi_a3, stats_fi_a3 = ask.build_and_cache_ask(
         q=q_fi,
         force=True,
         ui="fi",
         rag_opener=lambda: FakeConnection(store),
-        llm_client=client_unused,
+        llm_client=client_fi_ui,
         embed_fn=fail_embed,
     )
-    assert len(client_unused.recorded_calls) == 0
-    assert stats_fi_a3.total_llm_calls == 0
+    assert len(client_fi_ui.recorded_calls) == 1
+    assert stats_fi_a3.total_llm_calls == 1
     assert variant_fi_a3["out_lang"] == "fi"
     assert variant_fi_a3["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["fi"]
 
@@ -1770,3 +1786,131 @@ def test_b1_validation_edge_cases_and_cold_default():
     assert stats_hit.cached_hit is True
     assert stats_hit.total_llm_calls == 0
     assert variant_hit == variant_fi
+
+
+def test_b2_ask_ui_staleness_and_background_rebuild(monkeypatch):
+    from backend import summary
+
+    store = _sample_store(with_history=True)
+    q_en = "How did the Winter War end?"
+    default_v1 = _b1_sample_default()
+    default_v1_json = json.dumps(default_v1, separators=(",", ":"), ensure_ascii=False)
+    default_hash = ask.question_hash(q_en)
+    sv_hash = ask.question_hash(q_en, ui="sv")
+
+    sv_cached = json.loads(default_v1_json)
+    sv_cached["answer"] = "Vinterkriget tog slut [1]."
+    sv_cached["out_lang"] = "sv"
+    sv_cached_json = json.dumps(sv_cached, separators=(",", ":"), ensure_ascii=False)
+
+    store["cache"][default_hash] = default_v1_json
+    store.setdefault("cache_hashes", {})[default_hash] = None
+    store["cache"][sv_hash] = sv_cached_json
+    store["cache_hashes"][sv_hash] = summary.source_hash(default_v1_json)
+
+    scheduled: list[tuple] = []
+    bg = type("BG", (), {"add_task": lambda self, fn, *args: scheduled.append((fn, args))})()
+    monkeypatch.setenv("ASK_LLM", "1")
+    ask._inflight_jobs.clear()
+
+    # Fresh -> verbatim, 0 jobs
+    r_fresh = ask.get_ask_response(
+        q_en,
+        background_tasks=bg,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+    )
+    assert r_fresh.body == sv_cached_json.encode("utf-8")
+    assert len(scheduled) == 0
+
+    # Mutate default row (wrong source_hash) -> stale -> default with out_lang: null + 1 job
+    default_v2 = _b1_sample_default()
+    default_v2["answer"] = "The Moscow Peace Treaty ended the war in 1940 [1]."
+    default_v2_json = json.dumps(default_v2, separators=(",", ":"), ensure_ascii=False)
+    store["cache"][default_hash] = default_v2_json
+
+    r_stale = ask.get_ask_response(
+        q_en,
+        background_tasks=bg,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+    )
+    d_stale = json.loads(r_stale.body)
+    assert d_stale["out_lang"] is None
+    assert d_stale["answer"] == default_v2["answer"]
+    assert len(scheduled) == 1
+
+    # build_and_cache_ask(force=False, ui="sv") detects stale row -> 1 call rebuild & new hash
+    client_rebuild = _make_fake_llm_client(
+        [
+            {
+                "items": [
+                    {"id": f"t{i}", "text": f"SV:{txt}"}
+                    for i, txt in enumerate(ask.collect_translatable(default_v2))
+                ]
+            }
+        ]
+    )
+    rebuilt, stats_r = ask.build_and_cache_ask(
+        q=q_en,
+        force=False,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_rebuild,
+        embed_fn=lambda _: (_ for _ in ()).throw(AssertionError("no embed")),
+    )
+    assert stats_r.cached_hit is False
+    assert stats_r.total_llm_calls == 1
+    assert rebuilt["answer"] == f"SV:{default_v2['answer']}"
+    assert store["cache_hashes"][sv_hash] == summary.source_hash(default_v2_json)
+    assert store["cache_hashes"][default_hash] is None
+
+
+def test_b5_same_language_ask_translates_finnish_milestones():
+    from backend import summary
+
+    store = _sample_store(with_history=True)
+    q_en = "How did the Winter War end?"
+    default_payload = _b1_sample_default()
+    # Simulate Finnish milestone answer & facts even though English question/answer is in English
+    default_payload["milestones"][1]["answer"] = "Moskovan rauha päätti talvisodan [1]."
+    default_payload["milestones"][1]["facts"][0]["text"] = "Rauhansopimus allekirjoitettiin 12. maaliskuuta 1940"
+    default_json = json.dumps(default_payload, separators=(",", ":"), ensure_ascii=False)
+    default_hash = ask.question_hash(q_en)
+    store["cache"][default_hash] = default_json
+
+    en_overrides = {
+        "Moskovan rauha päätti talvisodan [1].": "The Moscow Peace Treaty ended the Winter War [1].",
+        "Rauhansopimus allekirjoitettiin 12. maaliskuuta 1940": "Peace treaty signed on 12 March 1940",
+    }
+    client_en = _make_fake_llm_client(
+        [
+            {
+                "items": [
+                    {"id": f"t{i}", "text": en_overrides.get(txt, txt)}
+                    for i, txt in enumerate(ask.collect_translatable(default_payload))
+                ]
+            }
+        ]
+    )
+    built_en, stats_en = ask.build_and_cache_ask(
+        q=q_en,
+        force=False,
+        ui="en",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_en,
+        embed_fn=lambda _: (_ for _ in ()).throw(AssertionError("no embed")),
+    )
+    assert stats_en.total_llm_calls == 1
+    user_msg = client_en.recorded_calls[0]["messages"][0]["content"]
+    assert "Moskovan rauha päätti talvisodan [1]." in user_msg
+    assert "Rauhansopimus allekirjoitettiin 12. maaliskuuta 1940" in user_msg
+    assert built_en["milestones"][1]["answer"] == "The Moscow Peace Treaty ended the Winter War [1]."
+    assert built_en["milestones"][1]["facts"][0]["text"] == "Peace treaty signed on 12 March 1940"
+    assert (
+        built_en["milestones"][1]["facts"][0]["source_sentence"]
+        == default_payload["milestones"][1]["facts"][0]["source_sentence"]
+    )
+    en_hash = ask.question_hash(q_en, ui="en")
+    assert store["cache_hashes"][en_hash] == summary.source_hash(default_json)
+

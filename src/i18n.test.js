@@ -112,3 +112,21 @@ test("ask.unchangedSince formats plain string with unformatted year for fi, sv, 
     assert.equal(out, expected[code]);
   }
 });
+
+test("016 summarize multilingual keys exist and are non-empty in fi, sv, en", () => {
+  const keys = [
+    "summary.nativeLabel",
+    "summary.mtFromWiki.fi",
+    "summary.mtFromWiki.sv",
+    "summary.mtFromWiki.en",
+    "summary.fiHistoryLabel",
+    "summary.historyBuilding",
+  ];
+  for (const code of SUPPORTED) {
+    for (const key of keys) {
+      const val = STRINGS[code][key];
+      assert.equal(typeof val, "string", `${code}.${key} must be a string`);
+      assert.ok(val.trim().length > 0, `${code}.${key} must be non-empty`);
+    }
+  }
+});
