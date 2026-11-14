@@ -64,7 +64,9 @@ SELECT
             ),
             ''
         ) AS UNSIGNED
-    ) AS event_year
+    ) AS event_year,
+    g.lat,
+    g.lon
 FROM wikirag.article a
 JOIN wikirag.article_coord c
   ON c.lang = a.lang AND c.page_id = a.page_id
@@ -82,6 +84,8 @@ LEFT JOIN (
   ON fi_cat.page_id = IF(a.lang = 'fi', a.page_id, fi.page_id)
 LEFT JOIN wikihistory.history_stats hs
   ON a.lang = 'fi' AND hs.page_id = a.page_id
+LEFT JOIN wikirag.article_geo g
+  ON g.wikidata_id = a.wikidata_id
 ORDER BY a.lang, a.page_id
 """
 
@@ -255,6 +259,8 @@ def _build_stars_payload() -> bytes:
                     has_history,
                     first_edit_year,
                     event_year,
+                    lat,
+                    lon,
                 ) = row
                 hist = bool(has_history)
                 stars.append(
@@ -274,8 +280,8 @@ def _build_stars_payload() -> bytes:
                         if hist and first_edit_year is not None
                         else None,
                         "event_year": int(event_year) if event_year is not None else None,
-                        "lat": None,
-                        "lon": None,
+                        "lat": float(lat) if lat is not None else None,
+                        "lon": float(lon) if lon is not None else None,
                     }
                 )
             return json.dumps(stars, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

@@ -72,7 +72,10 @@ def test_stars_shape_counts_and_gzip():
 
     counts = {"fi": 0, "sv": 0, "en": 0}
     hist_count = 0
+    located = 0
     talvisota = None
+    place = None
+    person = None
     expected_keys = {
         "lang",
         "page_id",
@@ -101,9 +104,15 @@ def test_stars_shape_counts_and_gzip():
             assert isinstance(row["first_edit_year"], int)
         else:
             assert row["first_edit_year"] is None
-        assert row["lat"] is None and row["lon"] is None
+        assert (row["lat"] is None) == (row["lon"] is None)
+        if row["lat"] is not None:
+            located += 1
         if row["lang"] == "fi" and row["page_id"] == 1256:
             talvisota = row
+        if row["lang"] == "fi" and row["title"] == "Urho Kekkonen":
+            person = row
+        if row["lang"] == "fi" and row["title"] == "Suomenlinna":
+            place = row
 
     assert counts == {"fi": 19285, "sv": 4921, "en": 5254}
     assert hist_count == _fi_pages_with_history()
@@ -111,6 +120,9 @@ def test_stars_shape_counts_and_gzip():
     assert talvisota["title"] == "Talvisota"
     assert talvisota["length"] == 78984
     assert talvisota["event_year"] == 1939
+    assert person is not None and person["lat"] is None and person["lon"] is None
+    assert place is not None and 59.9 < place["lat"] < 60.5 and 24.5 < place["lon"] < 25.3
+    assert located > 1000
 
 
 def test_search_shape_empty_clamp_and_validation():

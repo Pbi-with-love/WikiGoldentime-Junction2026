@@ -506,7 +506,8 @@ export function createGalaxyScene({
     posHistory[i3 + 2] = hz;
 
     // 3. Geography (Map of Finland + Unlocated articles nebula)
-    if (s.lat !== null && s.lat !== undefined && s.lon !== null && s.lon !== undefined) {
+    // Finland map box incl. ceded Karelia; coords outside it (abroad) go to the unlocated cluster.
+    if (s.lat != null && s.lon != null && s.lat >= 59.5 && s.lat <= 70.5 && s.lon >= 19 && s.lon <= 33.5) {
       const [gx, gy, gz] = latLonToGeoPoint(s.lat, s.lon, frac2 * 0.7);
       posGeography[i3] = gx;
       posGeography[i3 + 1] = gy;
