@@ -106,13 +106,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     mode_tag = "translated"
             else:
-                force_def = bool(
-                    args.force and not (lang == "fi" and page_id in NEVER_FORCE_FI_DEFAULTS)
-                )
                 payload, stats, from_cache = summary.build_and_cache_llm_summary(
                     lang=lang,
                     page_id=page_id,
-                    force=force_def,
+                    force=args.force,
                     ui=None,
                 )
                 mode_tag = "default"
@@ -127,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"sections={stats.sections} ghosts={stats.ghosts} "
                 f"facts_kept={stats.facts_kept} facts_dropped={stats.facts_dropped} "
                 f"calls={stats.total_calls} failed_calls={stats.failed_calls} "
+                f"guard_fallbacks={stats.guard_fallbacks} "
                 f"strings={stats.translate_strings} fallbacks={stats.translate_fallbacks} "
                 f"seconds={elapsed:.2f} "
                 f"input_tokens={stats.input_tokens} output_tokens={stats.output_tokens}",

@@ -43,6 +43,7 @@ DROP_HEADINGS = frozenset(
         "viitteet",
         "lähdeviitteet",
         "huomautukset",
+        "huomautuksia",
         "kirjallisuutta",
         "aiheesta muualla",
         "katso myös",
@@ -53,14 +54,19 @@ DROP_HEADINGS = frozenset(
         "se även",
         "externa länkar",
         "litteratur",
+        "fotnoter",
         # English
         "references",
         "notes",
+        "explanatory notes",
+        "citations",
+        "general and cited references",
         "sources",
         "see also",
         "external links",
         "further reading",
         "bibliography",
+        "footnotes",
     }
 )
 
@@ -168,20 +174,30 @@ UI_LANGUAGE_NAMES = {
     "en": "English",
 }
 
-SYSTEM_PROMPT = (
+SUMMARY_SYSTEM_PROMPT_TEMPLATE = (
     "You summarize Wikipedia articles using ONLY the text provided in the user message. "
     "Do not use any outside knowledge or assumptions. "
-    "Write all summaries and fact labels/values in the same language as the provided article text "
-    "(Finnish for Finnish text, Swedish for Swedish text, English for English text). "
+    "Write ALL summaries and fact labels/values (`tldr`, `one_line`, `summary`, `label`, `value`) "
+    "in {lang_name} ({lang}), regardless of any foreign names, terms, or quotes in the text. "
+    "Never write meta-commentary about the prompt, user message, or missing prose "
+    "(such as 'The provided text...', 'The user message...', or 'I cannot...'). "
     "Output valid JSON only, matching the required schema:\n"
-    "- For an article overview (`tldr`, `facts`): `tldr` must be 3 concise sentences.\n"
-    "- For a section (`one_line`, `summary`, `facts`): `one_line` must be 1 concise sentence; "
-    "`summary` must be 2-3 sentences.\n"
+    "- For an article overview (`tldr`, `facts`): `tldr` must be 3 concise sentences in {lang_name}.\n"
+    "- For a section (`one_line`, `summary`, `facts`): `one_line` must be 1 concise sentence in {lang_name}; "
+    "`summary` must be 2-3 sentences in {lang_name}.\n"
     "- For `facts`: include up to 3 key facts explicitly stated in the provided text. "
     "Every fact's `source` MUST be a single full sentence copied character-for-character verbatim "
     "from the provided text (never paraphrase, translate, shorten, or write placeholders). "
     "If no verbatim sentence supports a fact, return `[]` for `facts`."
 )
+
+SYSTEM_PROMPT = SUMMARY_SYSTEM_PROMPT_TEMPLATE.format(lang_name="the article's language", lang="fi/sv/en")
+
+
+def build_summary_system_prompt(lang: str) -> str:
+    """Return the LLM system prompt explicitly pinning summary output to ``lang``."""
+    lang_name = UI_LANGUAGE_NAMES.get(lang, lang)
+    return SUMMARY_SYSTEM_PROMPT_TEMPLATE.format(lang_name=lang_name, lang=lang)
 
 
 TRANSLATE_SCHEMA: dict[str, Any] = {
@@ -437,6 +453,7 @@ class BuildStats:
     output_tokens: int = 0
     translate_strings: int = 0
     translate_fallbacks: int = 0
+    guard_fallbacks: int = 0
 
 
 def _open_rag() -> mariadb.Connection:
@@ -627,6 +644,141 @@ def _find_verbatim_span(norm_source: str, input_text: str) -> str | None:
     pattern = r"\s+".join(re.escape(tok) for tok in tokens)
     match = re.search(pattern, input_text)
     return match.group(0) if match else None
+
+
+_META_TEXT_PREFIXES = (
+    "the provided text",
+    "the user message",
+    "the text provided",
+    "the given text",
+    "the input text",
+    "this section consists",
+    "the section consists",
+    "i cannot",
+    "i can't",
+    "i am unable",
+    "i'm unable",
+    "i apologize",
+    "sorry,",
+    "as an ai",
+    "as a language model",
+    "there is no prose",
+    "no article prose",
+    "annettu teksti",
+    "käyttäjän viesti",
+    "en voi",
+    "tekoälynä",
+    "den angivna texten",
+    "användarmeddelandet",
+    "jag kan inte",
+    "som en ai",
+)
+
+_META_TEXT_SUBSTRINGS = (
+    "no article prose to summarize",
+    "only a list of wikipedia citations",
+    "consists solely of a",
+    "as an ai language model",
+)
+
+# Disjoint high-frequency stopwords per language for cheap output-language guarding.
+_LANG_STOPWORDS: dict[str, frozenset[str]] = {
+    "fi": frozenset(
+        {
+            "ja", "sekä", "tai", "eli", "mutta", "vaan", "että", "jos", "kun", "kuin",
+            "koska", "vaikka", "sillä", "niin", "myös", "vielä", "jo", "ei", "eivät",
+            "oli", "olivat", "ollut", "olleet", "ovat", "olla", "voi", "voivat", "voidaan",
+            "joka", "jota", "jonka", "jossa", "josta", "johon", "jotka", "joiden", "joissa",
+            "joista", "tämä", "tämän", "tässä", "tästä", "nämä", "näiden", "siitä", "sitä",
+            "sen", "siihen", "siinä", "hän", "hänen", "kanssa", "aikana", "jälkeen",
+            "ennen", "välillä", "mukaan", "vuoksi", "kautta", "kohti", "vastaan", "ilman",
+            "asti", "lisäksi", "kuitenkin", "siten", "jolloin", "silloin", "usein", "paljon",
+            "monet", "kaikki", "koko", "osa", "noin", "lähes", "yli", "alle",
+        }
+    ),
+    "sv": frozenset(
+        {
+            "och", "att", "det", "den", "ett", "är", "var", "har", "hade", "som",
+            "för", "med", "av", "på", "till", "från", "om", "inte", "eller", "utan",
+            "efter", "före", "mellan", "genom", "mot", "vid", "hos", "över", "sedan",
+            "också", "även", "redan", "dock", "endast", "bara", "flera", "många", "alla",
+            "hela", "denna", "detta", "dessa", "hans", "hennes", "deras", "sin", "sitt",
+            "sina", "vilken", "vilket", "vilka", "där", "här", "när", "hur", "varför",
+            "skulle", "kunde", "måste", "blev", "blivit", "vara", "kunna", "fanns", "finns",
+            "fick", "gick", "kom",
+        }
+    ),
+    "en": frozenset(
+        {
+            "the", "an", "of", "in", "to", "and", "for", "with", "by", "from",
+            "was", "were", "is", "are", "as", "at", "that", "which", "this", "it",
+            "its", "had", "has", "have", "been", "not", "but", "or", "between", "during",
+            "after", "before", "over", "into", "also", "only", "other", "more", "most",
+            "such", "through", "about", "both", "each", "while", "where", "when", "who",
+            "his", "her", "their", "they", "would", "could", "there", "these", "those",
+        }
+    ),
+}
+
+_GUARD_WORD_RE = re.compile(r"[a-zåäöšž]+")
+
+
+def check_output_guard(text: str, expected_lang: str) -> str | None:
+    """Return rejection reason if generated text is meta-text or wrong language, else None."""
+    norm = normalize_ws(text).lstrip("\"'«»“”‘’ ").casefold()
+    if not norm:
+        return "empty"
+    for prefix in _META_TEXT_PREFIXES:
+        if norm.startswith(prefix):
+            return f"meta-text:{prefix}"
+    for substr in _META_TEXT_SUBSTRINGS:
+        if substr in norm:
+            return f"meta-text:{substr}"
+
+    if expected_lang not in _LANG_STOPWORDS:
+        return None
+    words = _GUARD_WORD_RE.findall(norm)
+    if len(words) < 3:
+        return None
+    # shortcut: disjoint stopword counts across fi/sv/en; >=2 competing stopwords beating
+    # expected, or an 8+ word sentence with 0 expected stopwords and >=1 competing stopword.
+    counts = {l_code: sum(1 for w in words if w in sw) for l_code, sw in _LANG_STOPWORDS.items()}
+    exp_hits = counts[expected_lang]
+    best_other, other_hits = max(
+        ((l_code, cnt) for l_code, cnt in counts.items() if l_code != expected_lang),
+        key=lambda item: item[1],
+    )
+    if other_hits >= 2 and other_hits > exp_hits:
+        return f"wrong-lang:{best_other}({other_hits})>{expected_lang}({exp_hits})"
+    if len(words) >= 8 and exp_hits == 0 and other_hits >= 1:
+        return f"wrong-lang:{best_other}({other_hits}),{expected_lang}(0)"
+    return None
+
+
+def _guard_facts(
+    facts: list[dict[str, str]],
+    expected_lang: str,
+    context_tag: str,
+) -> tuple[list[dict[str, str]], int]:
+    """Drop facts whose label or value fails the output guard; return (kept, guard_hits)."""
+    kept: list[dict[str, str]] = []
+    guard_hits = 0
+    for fact in facts:
+        reason = check_output_guard(fact["label"], expected_lang) or check_output_guard(
+            fact["value"], expected_lang
+        )
+        if reason is not None:
+            guard_hits += 1
+            logger.warning(
+                "Summary output guard dropped fact in %s (%s): label=%r value=%r",
+                context_tag,
+                reason,
+                fact["label"][:60],
+                fact["value"][:80],
+            )
+            continue
+        kept.append(fact)
+    return kept, guard_hits
 
 
 def filter_grounded_facts(
@@ -1169,68 +1321,137 @@ def build_summary_payload(
     if use_llm:
         resolved_model = model or os.environ.get("SUMMARY_MODEL") or SUMMARY_MODEL_DEFAULT
         client = llm_client if llm_client is not None else _default_anthropic_client()
+        lang_name = UI_LANGUAGE_NAMES.get(lang, lang)
+        sys_prompt = build_summary_system_prompt(lang)
 
         headings_line = (
             f"\n\nSections: {', '.join(s['heading'] for s in kept_sections)}"
             if kept_sections and not is_short
             else ""
         )
-        article_prompt = f"Title: {article_row['title']}\n\n{article_source_text}{headings_line}"
+        article_prompt = (
+            f"Language: {lang_name} ({lang})\n"
+            f"Title: {article_row['title']}\n\n{article_source_text}{headings_line}"
+        )
 
-        def summarize_article() -> tuple[str, list[dict[str, str]], int, int, int, int, bool]:
+        def summarize_article() -> tuple[str, list[dict[str, str]], int, int, int, int, bool, int]:
             parsed, in_t, out_t = _call_llm_json(
                 client,
                 resolved_model,
                 ARTICLE_SCHEMA,
                 article_prompt,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=sys_prompt,
             )
             if parsed is None or not str(parsed.get("tldr", "")).strip():
-                return fallback_tldr, [], 0, 0, in_t, out_t, True
+                return fallback_tldr, [], 0, 0, in_t, out_t, True, 0
+            tldr_val = str(parsed["tldr"]).strip()
+            guard_hits = 0
+            tldr_reason = check_output_guard(tldr_val, lang)
+            if tldr_reason is not None:
+                logger.warning(
+                    "Summary output guard rejected tldr for %s:%s (%s): %r",
+                    lang,
+                    page_id,
+                    tldr_reason,
+                    tldr_val[:100],
+                )
+                tldr_val = fallback_tldr
+                guard_hits += 1
             facts_kept, kept_n, dropped_n = filter_grounded_facts(
                 parsed.get("facts", []),
                 article_source_text,
             )
-            return str(parsed["tldr"]).strip(), facts_kept, kept_n, dropped_n, in_t, out_t, False
+            facts_kept, f_guard = _guard_facts(facts_kept, lang, f"{lang}:{page_id} overview")
+            if f_guard:
+                guard_hits += f_guard
+                kept_n = len(facts_kept)
+                dropped_n += f_guard
+            return tldr_val, facts_kept, kept_n, dropped_n, in_t, out_t, False, guard_hits
 
         def summarize_section(
             sec_item: dict[str, Any],
-        ) -> tuple[str, str, list[dict[str, str]], int, int, int, int, bool]:
+        ) -> tuple[str, str, list[dict[str, str]], int, int, int, int, bool, int]:
+            sec_prompt = f"Language: {lang_name} ({lang})\n\n{sec_item['text']}"
             parsed, in_t, out_t = _call_llm_json(
                 client,
                 resolved_model,
                 SECTION_SCHEMA,
-                sec_item["text"],
-                system_prompt=SYSTEM_PROMPT,
+                sec_prompt,
+                system_prompt=sys_prompt,
             )
             if parsed is None:
-                return sec_item["one_line"], sec_item["summary"], [], 0, 0, in_t, out_t, True
+                return sec_item["one_line"], sec_item["summary"], [], 0, 0, in_t, out_t, True, 0
             one_line_val = str(parsed.get("one_line", "")).strip()
             summary_val = str(parsed.get("summary", "")).strip()
             if not one_line_val or not summary_val:
-                return sec_item["one_line"], sec_item["summary"], [], 0, 0, in_t, out_t, True
+                return sec_item["one_line"], sec_item["summary"], [], 0, 0, in_t, out_t, True, 0
+            guard_hits = 0
+            ol_reason = check_output_guard(one_line_val, lang)
+            if ol_reason is not None:
+                logger.warning(
+                    "Summary output guard rejected one_line for %s:%s sec %s (%s): %r",
+                    lang,
+                    page_id,
+                    sec_item["no"],
+                    ol_reason,
+                    one_line_val[:100],
+                )
+                one_line_val = sec_item["one_line"]
+                guard_hits += 1
+            sum_reason = check_output_guard(summary_val, lang)
+            if sum_reason is not None:
+                logger.warning(
+                    "Summary output guard rejected summary for %s:%s sec %s (%s): %r",
+                    lang,
+                    page_id,
+                    sec_item["no"],
+                    sum_reason,
+                    summary_val[:100],
+                )
+                summary_val = sec_item["summary"]
+                guard_hits += 1
             facts_kept, kept_n, dropped_n = filter_grounded_facts(
                 parsed.get("facts", []),
                 sec_item["text"],
             )
-            return one_line_val, summary_val, facts_kept, kept_n, dropped_n, in_t, out_t, False
+            facts_kept, f_guard = _guard_facts(
+                facts_kept, lang, f"{lang}:{page_id} sec {sec_item['no']}"
+            )
+            if f_guard:
+                guard_hits += f_guard
+                kept_n = len(facts_kept)
+                dropped_n += f_guard
+            return (
+                one_line_val,
+                summary_val,
+                facts_kept,
+                kept_n,
+                dropped_n,
+                in_t,
+                out_t,
+                False,
+                guard_hits,
+            )
 
         worker_count = max(1, min(max_workers, 1 + len(sections_out)))
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
             art_future = pool.submit(summarize_article)
             sec_futures = [pool.submit(summarize_section, s) for s in sections_out]
 
-            tldr, article_facts, kept_n, dropped_n, in_t, out_t, failed = art_future.result()
+            tldr, article_facts, kept_n, dropped_n, in_t, out_t, failed, g_hits = art_future.result()
             stats.total_calls += 1
             stats.facts_kept += kept_n
             stats.facts_dropped += dropped_n
             stats.input_tokens += in_t
             stats.output_tokens += out_t
+            stats.guard_fallbacks += g_hits
             if failed:
                 stats.failed_calls += 1
 
             for sec_item, fut in zip(sections_out, sec_futures):
-                one_line_v, summary_v, s_facts, s_kept, s_drop, in_t, out_t, failed = fut.result()
+                one_line_v, summary_v, s_facts, s_kept, s_drop, in_t, out_t, failed, g_hits = (
+                    fut.result()
+                )
                 sec_item["one_line"] = one_line_v
                 sec_item["summary"] = summary_v
                 sec_item["facts"] = s_facts
@@ -1239,8 +1460,18 @@ def build_summary_payload(
                 stats.facts_dropped += s_drop
                 stats.input_tokens += in_t
                 stats.output_tokens += out_t
+                stats.guard_fallbacks += g_hits
                 if failed:
                     stats.failed_calls += 1
+
+        if stats.guard_fallbacks > 0:
+            logger.info(
+                "Summary build %s:%s@%s guard_fallbacks=%d",
+                lang,
+                page_id,
+                rev_id,
+                stats.guard_fallbacks,
+            )
 
     stats.sections = len(sections_out)
     stats.ghosts = len(ghosts_out)

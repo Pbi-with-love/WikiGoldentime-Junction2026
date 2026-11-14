@@ -1568,3 +1568,205 @@ def test_request_states_fresh_stale_and_no_history(monkeypatch):
     d = client.get("/api/summary/fi/1256").json()
     assert d["article"]["has_history"] is False and d["ghost_sections"] == []
     assert all(sec["history"] is None for sec in d["sections"]) and calls == []
+
+
+# ---- Spec 020: DROP_HEADINGS en/sv/fi, prompt language pinning, and output guard ----
+
+
+def test_drop_headings_en_sv_and_huomautuksia():
+    body = " ".join(["Word"] * 30)
+    en_drops = [
+        "References",
+        "Notes",
+        "Explanatory notes",
+        "Citations",
+        "General and cited references",
+        "Sources",
+        "Bibliography",
+        "Further reading",
+        "External links",
+        "See also",
+        "Footnotes",
+    ]
+    sv_drops = [
+        "Referenser",
+        "Noter",
+        "Källor",
+        "Externa länkar",
+        "Se även",
+        "Litteratur",
+        "Fotnoter",
+    ]
+    fi_drops = ["Huomautuksia", "Huomautukset", "Lähteet", "Viitteet"]
+
+    sections = ["## Background\n\n" + body]
+    for heading in en_drops + sv_drops + fi_drops:
+        sections.append(f"## {heading}\n\n{body}")
+    sections.append("## Aftermath\n\n" + body)
+
+    text = "# Winter War\n\nLead paragraph here.\n\n" + "\n\n".join(sections)
+    _, kept, all_h2 = summary.split_markdown_sections(text)
+    assert [s["heading"] for s in kept] == ["Background", "Aftermath"]
+    assert [s["no"] for s in kept] == [1, 2]
+    assert "explanatory notes" in all_h2
+    assert "fotnoter" in all_h2
+    assert "huomautuksia" in all_h2
+
+
+def test_output_guard_rejects_wrong_language_and_meta_text():
+    # Rejects Finnish one_line for English article
+    assert (
+        summary.check_output_guard(
+            "Ennen talvisotaa Neuvostoliiton johto odotti nopeaa voittoa, mutta armeijan heikko johto ja maastollisesti vaikea sota haastoivat suunnitelmat.",
+            "en",
+        )
+        is not None
+    )
+    assert (
+        summary.check_output_guard(
+            "Suomen itsenäistyminen 1917–1918 tapahtui Venäjän keisarikunnan romahtaessa, ja se johti valtapoliittiseen kriisiin sisällä.",
+            "en",
+        )
+        is not None
+    )
+    # Rejects Swedish for English and English for Finnish
+    assert (
+        summary.check_output_guard(
+            "Vinterkriget var ett krig mellan Finland och Sovjetunionen som utkämpades efter anfallet.",
+            "en",
+        )
+        is not None
+    )
+    assert (
+        summary.check_output_guard(
+            "The Winter War was fought between Finland and the Soviet Union during 1939 and 1940.",
+            "fi",
+        )
+        is not None
+    )
+    # Rejects meta-text lines
+    for meta in (
+        "The provided text is only a list of Wikipedia citations and contains no article prose to summarize.",
+        "The user message consists solely of a numbered citation list for an article.",
+        "I cannot summarize this section because there is no prose.",
+        "As an AI language model, I do not have enough context.",
+        "Annettu teksti on pelkkä luettelo lähteistä eikä sisällä artikkelitekstiä.",
+    ):
+        assert summary.check_output_guard(meta, "en") is not None
+
+    # Accepts valid target-language summaries (including with foreign proper names)
+    assert (
+        summary.check_output_guard(
+            "During the Winter War, Finnish forces defended the Mannerheim Line against the Soviet invasion.",
+            "en",
+        )
+        is None
+    )
+    assert (
+        summary.check_output_guard(
+            "Talvisota käytiin Suomen ja Neuvostoliiton välillä marraskuusta 1939 maaliskuuhun 1940.",
+            "fi",
+        )
+        is None
+    )
+    assert (
+        summary.check_output_guard(
+            "Vinterkriget utkämpades mellan Finland och Sovjetunionen från november 1939 till mars 1940.",
+            "sv",
+        )
+        is None
+    )
+
+
+def test_llm_summary_pins_language_and_falls_back_on_guard_hit():
+    en_lead = (
+        "The Winter War was a conflict between the Soviet Union and Finland in 1939 and 1940. "
+        + " ".join(f"Lead sentence number {i} gives background on the war." for i in range(1, 15))
+    )
+    secs = []
+    for idx in range(1, 5):
+        body = f"Section {idx} extractive opening sentence in English. " + " ".join(
+            f"Detail sentence {j} explains event {idx} clearly." for j in range(1, 75)
+        )
+        secs.append(f"## Section {idx}\n\n{body}")
+    article_text = f"# Winter War\n\n{en_lead}\n\n" + "\n\n".join(secs)
+    row = {
+        "lang": "en",
+        "page_id": 33924,
+        "rev_id": 1303580599,
+        "wikidata_id": "Q134949",
+        "title": "Winter War",
+        "url": "https://en.wikipedia.org/wiki/Winter_War",
+        "text": article_text,
+    }
+
+    def handler(kwargs):
+        sys_p = kwargs["system"]
+        user_msg = kwargs["messages"][0]["content"]
+        assert "English (en)" in sys_p
+        assert "Language: English (en)" in user_msg
+        schema_req = kwargs["output_config"]["format"]["schema"]["required"]
+        if "tldr" in schema_req:
+            return _msg_resp(
+                {
+                    "tldr": "The Winter War was fought between Finland and the Soviet Union from 1939 to 1940.",
+                    "facts": [
+                        {
+                            "label": "Conflict",
+                            "value": "Winter War",
+                            "source": "The Winter War was a conflict between the Soviet Union and Finland in 1939 and 1940.",
+                        }
+                    ],
+                }
+            )
+        if "## Section 1" in user_msg:
+            # Finnish one_line -> rejected by guard, falls back to extractive; English summary -> kept
+            return _msg_resp(
+                {
+                    "one_line": "Ennen talvisotaa Neuvostoliiton johto odotti nopeaa voittoa, mutta maasto ja puolustus yllättivät.",
+                    "summary": "Section 1 gives an English summary of the events and forces involved.",
+                    "facts": [],
+                }
+            )
+        if "## Section 2" in user_msg:
+            # Meta-text one_line and summary -> both fall back to extractive
+            return _msg_resp(
+                {
+                    "one_line": "The provided text is only a list of Wikipedia citations and contains no article prose.",
+                    "summary": "The user message consists solely of citations with no prose to summarize.",
+                    "facts": [],
+                }
+            )
+        return _msg_resp(
+            {
+                "one_line": "This section summarizes the campaign in clear English prose.",
+                "summary": "The campaign unfolded over the winter months with heavy fighting.",
+                "facts": [],
+            }
+        )
+
+    fake_client = _FakeAnthropic(handler)
+    payload, stats = summary.build_summary_payload(
+        row,
+        has_history=False,
+        use_llm=True,
+        llm_client=fake_client,
+        max_workers=2,
+    )
+    assert payload["mode"] == "llm"
+    # Section 1 one_line fell back to extractive, while its valid English summary was kept
+    assert payload["sections"][0]["one_line"] == "Section 1 extractive opening sentence in English."
+    assert (
+        payload["sections"][0]["summary"]
+        == "Section 1 gives an English summary of the events and forces involved."
+    )
+    # Section 2 both one_line and summary fell back to extractive
+    assert payload["sections"][1]["one_line"] == "Section 2 extractive opening sentence in English."
+    assert payload["sections"][1]["summary"].startswith("Section 2 extractive opening sentence in English.")
+    # Section 3 kept LLM output
+    assert (
+        payload["sections"][2]["one_line"]
+        == "This section summarizes the campaign in clear English prose."
+    )
+    assert stats.guard_fallbacks == 3
+    assert stats.failed_calls == 0
