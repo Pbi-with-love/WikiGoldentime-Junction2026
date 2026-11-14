@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextvars
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import difflib
 from functools import lru_cache
+import gc
 import html
 import json
 import logging
@@ -19,7 +21,7 @@ import time
 from typing import Any
 import urllib.parse
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 import mariadb
 from starlette.middleware.gzip import GZipMiddleware
@@ -424,7 +426,7 @@ def _prewarm_asof_diff() -> None:
         logger.warning("Pre-warm failed querying today rev_id for fi:1256", exc_info=True)
 
     asof_revs: dict[str, str] = {}
-    for at_val in ("2006-12-31", "2026-12-31"):
+    for at_val in ("2006-12-31", "2012-12-31", "2026-12-31"):
         try:
             payload = _get_asof_cached(1256, _normalize_at(at_val))
             asof_revs[at_val] = str(payload["rev_id"])
@@ -434,10 +436,12 @@ def _prewarm_asof_diff() -> None:
             logger.warning("Pre-warm failed for /api/asof/1256?at=%s", at_val, exc_info=True)
 
     if today_rev is not None:
+        # Spec 033: the demo clicks are As of 2006 / 2012 (diff from that revision) and the 2006 card.
         from_revs = ["1862876", "2114325"]
-        rev_2026 = asof_revs.get("2026-12-31")
-        if rev_2026 and rev_2026 not in from_revs and rev_2026 != today_rev:
-            from_revs.append(rev_2026)
+        for at_val in ("2012-12-31", "2026-12-31"):
+            rev = asof_revs.get(at_val)
+            if rev and rev not in from_revs and rev != today_rev:
+                from_revs.append(rev)
         for from_rev in from_revs:
             try:
                 _get_diff_cached(1256, from_rev, today_rev)
@@ -461,6 +465,66 @@ def _prewarm_asof_diff() -> None:
     )
 
 
+# Spec 033 profiling aid: WM_TIMING=1 logs one line per /api/asof and /api/diff request
+# (cache hit/miss, queue wait, handler, SQL, clean, diff, TTFB, total) and gen-2 GC pauses.
+_TIMING = os.environ.get("WM_TIMING") == "1"
+_rec: contextvars.ContextVar[dict | None] = contextvars.ContextVar("wm_rec", default=None)
+
+
+def _tmark(key: str, t0: float) -> None:
+    d = _rec.get()
+    if _TIMING and d is not None:
+        d[key] = d.get(key, 0.0) + (time.perf_counter() - t0) * 1000.0
+
+
+def _tset(key: str, val: Any) -> None:
+    d = _rec.get()
+    if _TIMING and d is not None:
+        d[key] = val
+
+
+if _TIMING:
+    _gc_t: dict[int, float] = {}
+
+    def _gc_cb(phase: str, info: dict) -> None:
+        if phase == "start":
+            _gc_t[info["generation"]] = time.perf_counter()
+        elif info["generation"] == 2:
+            logger.warning("WMT gc gen2 %.1f ms collected=%s", (time.perf_counter() - _gc_t.get(2, 0)) * 1000.0, info.get("collected"))
+
+    gc.callbacks.append(_gc_cb)
+
+
+class _TimingMiddleware:
+    """Pure-ASGI so it also sees the gzip'd send; outermost middleware."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (path.startswith("/api/asof") or path.startswith("/api/diff")):
+            await self.app(scope, receive, send)
+            return
+        t0 = time.perf_counter()
+        rec: dict[str, Any] = {"_t0": t0}
+        _rec.set(rec)
+
+        async def _send(msg):
+            if msg["type"] == "http.response.start":
+                rec["ttfb"] = (time.perf_counter() - t0) * 1000.0
+            await send(msg)
+
+        await self.app(scope, receive, _send)
+        total = (time.perf_counter() - t0) * 1000.0
+        logger.warning(
+            "WMT %s?%s %s",
+            path,
+            scope.get("query_string", b"").decode(),
+            " ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in {**rec, "total": total}.items() if k != "_t0"),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _get_stars_payload()
@@ -471,6 +535,8 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="wikimemory API", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+if _TIMING:
+    app.add_middleware(_TimingMiddleware)
 
 
 @app.get("/api/stars")
@@ -668,11 +734,15 @@ def get_article_timeline(page_id: int):
 
 
 def _build_asof_payload(page_id: int, moment: str) -> dict[str, Any]:
+    _t = time.perf_counter()
     con = _open_svt()
+    _tmark("conn", _t)
     try:
         cur = con.cursor()
         try:
+            _t = time.perf_counter()
             row = history.as_of(cur, page_id, moment)
+            _tmark("sql", _t)
         finally:
             cur.close()
     finally:
@@ -684,6 +754,9 @@ def _build_asof_payload(page_id: int, moment: str) -> dict[str, Any]:
     row_end = row["row_end"]
     row_end_iso = None if row_end is None else _iso_utc(row_end)
     is_current = row_end_iso is None or row_end_iso.startswith("2106-")
+    _t = time.perf_counter()
+    blocks = [[tag, txt] for tag, txt in _clean_blocks(row["text"])]
+    _tmark("clean", _t)
     return {
         "title": row["title"],
         "rev_id": int(row["rev_id"]),
@@ -691,7 +764,7 @@ def _build_asof_payload(page_id: int, moment: str) -> dict[str, Any]:
         "comment": row["comment"] or "",
         "row_start": _iso_utc(row["row_start"]),
         "row_end": None if is_current else row_end_iso,
-        "blocks": [[tag, txt] for tag, txt in _clean_blocks(row["text"])],
+        "blocks": blocks,
     }
 
 
@@ -703,19 +776,32 @@ def _get_asof_cached(page_id: int, moment: str) -> dict[str, Any]:
 
 @app.get("/api/asof/{page_id}")
 def get_asof(page_id: int, at: str | None = None):
+    d = _rec.get()
+    if _TIMING and d is not None:
+        d["wait"] = (time.perf_counter() - d["_t0"]) * 1000.0
     moment = _normalize_at(at)
     if at is None:
         return _build_asof_payload(page_id, moment)
-    return _get_asof_cached(page_id, moment)
+    _t = time.perf_counter()
+    h0 = _get_asof_cached.cache_info().hits if _TIMING else 0
+    out = _get_asof_cached(page_id, moment)
+    if _TIMING:
+        _tset("hit", int(_get_asof_cached.cache_info().hits > h0))
+    _tmark("handler", _t)
+    return out
 
 
 def _build_diff_payload(page_id: int, from_param: str, to_param: str | None) -> dict[str, Any]:
+    _t = time.perf_counter()
     con = _open_svt()
+    _tmark("conn", _t)
     try:
         cur = con.cursor()
         try:
+            _t = time.perf_counter()
             from_row = _resolve_diff_side(cur, page_id, from_param)
             to_row = _resolve_diff_side(cur, page_id, to_param)
+            _tmark("sql", _t)
         finally:
             cur.close()
     finally:
@@ -724,9 +810,14 @@ def _build_diff_payload(page_id: int, from_param: str, to_param: str | None) -> 
     if from_row is None or to_row is None:
         raise HTTPException(status_code=404, detail=f"Could not resolve diff revision for page_id {page_id}")
 
+    _t = time.perf_counter()
     old_blocks = _clean_blocks(from_row["text"])
     new_blocks = _clean_blocks(to_row["text"])
-    return {"parts": _diff_blocks(old_blocks, new_blocks)}
+    _tmark("clean", _t)
+    _t = time.perf_counter()
+    out = {"parts": _diff_blocks(old_blocks, new_blocks)}
+    _tmark("diff", _t)
+    return out
 
 
 # shortcut: process-lifetime cache, restart api after data reloads
@@ -741,10 +832,19 @@ def get_diff(
     from_param: str = Query(..., alias="from"),
     to_param: str | None = Query(default=None, alias="to"),
 ):
+    d = _rec.get()
+    if _TIMING and d is not None:
+        d["wait"] = (time.perf_counter() - d["_t0"]) * 1000.0
     from_key = from_param.strip()
     if to_param is None:
         return _build_diff_payload(page_id, from_key, None)
-    return _get_diff_cached(page_id, from_key, to_param.strip())
+    _t = time.perf_counter()
+    h0 = _get_diff_cached.cache_info().hits if _TIMING else 0
+    out = _get_diff_cached(page_id, from_key, to_param.strip())
+    if _TIMING:
+        _tset("hit", int(_get_diff_cached.cache_info().hits > h0))
+    _tmark("handler", _t)
+    return out
 
 
 @app.get("/api/summary/{lang}/{page_id}")

@@ -1,0 +1,17 @@
+Spec 033 bug 1: TTFB via curl --compressed on the VPS, 30 calls per URL, 1-8 s random gaps, Ask poll every 3 s + stars every 60 s.
+Cause: server never slow on cache hits (<=15 ms in WM_TIMING log). Through an SSH tunnel to the profiling instance
+(8012, /root/wm033, WM_TIMING=1) the client saw 1.27 s / 0.44 s on requests the server logged at <=15 ms => tunnel/network jitter.
+Only real server slowness: cold diff miss 841 ms (735 ms SQL rev lookup); As of 2012 + its diff were not pre-warmed. Fix: pre-warm them.
+Cold first click after fix: asof 2012 20 ms, diff 2012 13 ms, 2006 card 14 ms.
+Restart of tmux api: 2026-11-14 22:01:20 UTC after 61 s quiet; "Pre-warmed asof/diff cache for fi:1256 (today=23500447, warmed=7, failed=0, 4610 ms)".
+
+BEFORE (artifacts: bug1_load.sh)
+asof2006 p50=6ms p95=7ms max=16ms over500=0 sha 9f971cf484eb63e9
+asof2012 p50=6ms p95=17ms max=48ms over500=0 sha 589895c1134b5b7e
+card2006 p50=12ms p95=15ms max=72ms over500=0 sha 3b02011bace1bcb3
+diff2012 p50=10ms p95=14ms max=62ms over500=0 sha fce00746e392d4c5
+AFTER
+asof2006 p50=5ms p95=6ms max=24ms over500=0 sha 9f971cf484eb63e9
+asof2012 p50=6ms p95=10ms max=39ms over500=0 sha 589895c1134b5b7e
+card2006 p50=11ms p95=14ms max=49ms over500=0 sha 3b02011bace1bcb3
+diff2012 p50=10ms p95=13ms max=31ms over500=0 sha fce00746e392d4c5
