@@ -3,7 +3,8 @@
 
 Reads (lang, page_id) from wikirag.article, queries {lang}.wikipedia.org PageImages API in
 batches of up to 50 page IDs, verifies Commons existence and credit metadata (LicenseShortName,
-Artist) on commons.wikimedia.org, and upserts valid rows into wikirag.article_image.
+LicenseUrl, Artist, NonFree) on commons.wikimedia.org, and upserts valid rows into
+wikirag.article_image. With --credits-only, refreshes Commons credits for existing rows.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from html.parser import HTMLParser
 import http.client
 import json
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -25,8 +27,9 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_UA = (
-    "wikimemory/0.1 (Junction 2026 hackathon demo; "
-    "contact: wikimemory-team@example.invalid) python-urllib"
+    "wikimemory/0.2 "
+    "(https://github.com/Pbi-with-love/WikiGoldentime-Junction2026; Junction 2026 hackathon demo) "
+    "python-urllib/3"
 )
 DEFAULT_PROGRESS_FILE = os.path.expanduser("~/wikimemory/fetch_images.progress.json")
 LANGS = ("en", "fi", "sv")
@@ -40,7 +43,9 @@ EF_SEARCH = 80
 MAX_FILE_NAME_LEN = 255
 MAX_THUMB_URL_LEN = 1024
 MAX_LICENSE_LEN = 64
+MAX_LICENSE_URL_LEN = 512
 MAX_ARTIST_LEN = 512
+NON_FREE_LICENSE_RE = re.compile(r"non-free|fair use", re.IGNORECASE)
 
 ALLOWED_THUMB_PREFIXES = (
     "https://thumb.wikimedia.org/",
@@ -54,19 +59,43 @@ CREATE TABLE IF NOT EXISTS article_image (
   file_name VARCHAR(255) NOT NULL,
   thumb_url VARCHAR(1024) NOT NULL,
   license VARCHAR(64) NULL,
+  license_url VARCHAR(512) NULL,
   artist VARCHAR(512) NULL,
+  non_free TINYINT(1) NOT NULL DEFAULT 0,
+  credit_checked_at DATETIME NULL,
   PRIMARY KEY (lang, page_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 """
 
 UPSERT_SQL = """
-INSERT INTO article_image (lang, page_id, file_name, thumb_url, license, artist)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO article_image (
+  lang, page_id, file_name, thumb_url, license, license_url, artist, non_free, credit_checked_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
 ON DUPLICATE KEY UPDATE
   file_name = VALUES(file_name),
   thumb_url = VALUES(thumb_url),
   license = VALUES(license),
-  artist = VALUES(artist)
+  license_url = VALUES(license_url),
+  artist = VALUES(artist),
+  non_free = VALUES(non_free),
+  credit_checked_at = UTC_TIMESTAMP()
+"""
+
+UPDATE_CREDITS_SQL = """
+UPDATE article_image
+SET license = ?,
+    license_url = ?,
+    artist = ?,
+    non_free = ?,
+    credit_checked_at = UTC_TIMESTAMP()
+WHERE file_name = ?
+"""
+
+MARK_MISSING_CREDITS_SQL = """
+UPDATE article_image
+SET credit_checked_at = UTC_TIMESTAMP()
+WHERE file_name = ?
 """
 
 BLOCK_TAGS = frozenset(
@@ -141,7 +170,10 @@ class _TextExtractor(HTMLParser):
 @dataclass(frozen=True)
 class CommonsMeta:
     license: str | None
+    license_url: str | None
     artist: str | None
+    non_free: bool = False
+    has_credit: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,6 +206,37 @@ def clean_metadata_text(raw: Any, max_len: int) -> str | None:
     if not collapsed:
         return None
     return collapsed[:max_len]
+
+
+def clean_license_url(raw: Any) -> str | None:
+    """Normalize Commons LicenseUrl and allow only http(s):// URLs."""
+    cleaned = clean_metadata_text(raw, MAX_LICENSE_URL_LEN)
+    if not cleaned:
+        return None
+    if cleaned.startswith("//"):
+        cleaned = "https:" + cleaned
+    if not (cleaned.startswith("https://") or cleaned.startswith("http://")):
+        return None
+    parts = urllib.parse.urlsplit(cleaned)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return cleaned[:MAX_LICENSE_URL_LEN]
+
+
+def parse_non_free(non_free_raw: Any, license_short: str | None) -> bool:
+    """Return True if Commons NonFree metadata or licence text flags a non-free file."""
+    if isinstance(non_free_raw, bool):
+        if non_free_raw:
+            return True
+    elif isinstance(non_free_raw, int):
+        if non_free_raw == 1:
+            return True
+    elif non_free_raw is not None:
+        if str(non_free_raw).strip().lower() in ("true", "1"):
+            return True
+    if license_short and NON_FREE_LICENSE_RE.search(license_short):
+        return True
+    return False
 
 
 def sanitize_thumb_url(raw_url: str | None) -> str | None:
@@ -467,8 +530,17 @@ def parse_commons_imageinfo_responses(
             continue
         ext = imageinfo[0].get("extmetadata") or {}
         lic = clean_metadata_text((ext.get("LicenseShortName") or {}).get("value"), MAX_LICENSE_LEN)
+        lic_url = clean_license_url((ext.get("LicenseUrl") or {}).get("value"))
         artist = clean_metadata_text((ext.get("Artist") or {}).get("value"), MAX_ARTIST_LEN)
-        results[name] = CommonsMeta(license=lic, artist=artist)
+        non_free = parse_non_free((ext.get("NonFree") or {}).get("value"), lic)
+        has_credit = clean_metadata_text((ext.get("Credit") or {}).get("value"), MAX_ARTIST_LEN) is not None
+        results[name] = CommonsMeta(
+            license=lic,
+            license_url=lic_url,
+            artist=artist,
+            non_free=non_free,
+            has_credit=has_credit,
+        )
     return results
 
 
@@ -492,6 +564,26 @@ def _split_commons_chunks(file_names: list[str]) -> list[list[str]]:
     return chunks
 
 
+def fetch_commons_chunk(
+    client: PoliteClient,
+    chunk: list[str],
+) -> dict[str, CommonsMeta | None]:
+    """Fetch Commons extmetadata for one safe-sized chunk of file names."""
+    base_url = "https://commons.wikimedia.org/w/api.php"
+    base_params = {
+        "action": "query",
+        "prop": "imageinfo",
+        "iiprop": "extmetadata",
+        "iiextmetadatafilter": "LicenseShortName|LicenseUrl|Artist|Credit|NonFree",
+        "titles": "|".join(f"File:{name}" for name in chunk),
+        "format": "json",
+        "formatversion": "2",
+        "maxlag": "5",
+    }
+    responses = fetch_paginated_query(client, base_url, base_params)
+    return parse_commons_imageinfo_responses(chunk, responses)
+
+
 def fetch_commons_credits(
     client: PoliteClient,
     file_names: list[str],
@@ -499,21 +591,9 @@ def fetch_commons_credits(
 ) -> dict[str, CommonsMeta | None]:
     """Fetch Commons extmetadata for uncached file_names and populate cache."""
     missing_names = list(dict.fromkeys(name for name in file_names if name not in cache))
-    base_url = "https://commons.wikimedia.org/w/api.php"
 
     for chunk in _split_commons_chunks(missing_names):
-        base_params = {
-            "action": "query",
-            "prop": "imageinfo",
-            "iiprop": "extmetadata",
-            "iiextmetadatafilter": "LicenseShortName|Artist",
-            "titles": "|".join(f"File:{name}" for name in chunk),
-            "format": "json",
-            "formatversion": "2",
-            "maxlag": "5",
-        }
-        responses = fetch_paginated_query(client, base_url, base_params)
-        parsed = parse_commons_imageinfo_responses(chunk, responses)
+        parsed = fetch_commons_chunk(client, chunk)
         cache.update(parsed)
 
     return {name: cache[name] for name in file_names}
@@ -683,6 +763,7 @@ def run_self_test() -> int:
                                     )
                                 },
                                 "LicenseShortName": {"value": "Public domain"},
+                                "LicenseUrl": {"value": "//creativecommons.org/publicdomain/mark/1.0/"},
                             }
                         }
                     ],
@@ -692,7 +773,30 @@ def run_self_test() -> int:
                     "ns": 6,
                     "title": "File:Antti Satuli.jpg",
                     "imagerepository": "local",
-                    "imageinfo": [{"extmetadata": {"Artist": {"value": "<div>   </div>"}}}],
+                    "imageinfo": [
+                        {
+                            "extmetadata": {
+                                "Artist": {"value": "<div>   </div>"},
+                                "Credit": {"value": "SA-kuva"},
+                                "LicenseUrl": {"value": "javascript:alert(1)"},
+                                "NonFree": {"value": "true"},
+                            }
+                        }
+                    ],
+                },
+                {
+                    "pageid": 888888,
+                    "ns": 6,
+                    "title": "File:Fair use sample.jpg",
+                    "imagerepository": "local",
+                    "imageinfo": [
+                        {
+                            "extmetadata": {
+                                "LicenseShortName": {"value": "Fair use"},
+                                "LicenseUrl": {"value": "https://en.wikipedia.org/wiki/Wikipedia:Non-free_content"},
+                            }
+                        }
+                    ],
                 },
                 {
                     "ns": 6,
@@ -708,6 +812,7 @@ def run_self_test() -> int:
         [
             "A_Finnish_Maxim_M-32_machine_gun_nest_during_the_Winter_War.jpg",
             "Antti_Satuli.jpg",
+            "Fair_use_sample.jpg",
             "Local_only_image.jpg",
         ],
         [sample_commons],
@@ -715,12 +820,23 @@ def run_self_test() -> int:
     meta_maxim = parsed_commons["A_Finnish_Maxim_M-32_machine_gun_nest_during_the_Winter_War.jpg"]
     assert meta_maxim is not None
     assert meta_maxim.license == "Public domain"
+    assert meta_maxim.license_url == "https://creativecommons.org/publicdomain/mark/1.0/"
     assert meta_maxim.artist == "Unknown & Co <SA-kuva>", f"Got artist={meta_maxim.artist!r}"
+    assert meta_maxim.non_free is False
 
     meta_satuli = parsed_commons["Antti_Satuli.jpg"]
     assert meta_satuli is not None
     assert meta_satuli.license is None
+    assert meta_satuli.license_url is None
     assert meta_satuli.artist is None
+    assert meta_satuli.non_free is True
+    assert meta_satuli.has_credit is True
+
+    meta_fair_use = parsed_commons["Fair_use_sample.jpg"]
+    assert meta_fair_use is not None
+    assert meta_fair_use.license == "Fair use"
+    assert meta_fair_use.license_url == "https://en.wikipedia.org/wiki/Wikipedia:Non-free_content"
+    assert meta_fair_use.non_free is True
 
     assert parsed_commons["Local_only_image.jpg"] is None
 
@@ -729,12 +845,30 @@ def run_self_test() -> int:
     cleaned_long = clean_metadata_text(long_html, MAX_ARTIST_LEN)
     assert cleaned_long is not None and len(cleaned_long) == 512
 
+    assert clean_license_url("//creativecommons.org/licenses/by/4.0/") == (
+        "https://creativecommons.org/licenses/by/4.0/"
+    )
+    assert clean_license_url("http://creativecommons.org/licenses/by/4.0/") == (
+        "http://creativecommons.org/licenses/by/4.0/"
+    )
+    assert clean_license_url("javascript:alert(1)") is None
+    assert parse_non_free("true", None) is True
+    assert parse_non_free("1", None) is True
+    assert parse_non_free(True, None) is True
+    assert parse_non_free("false", "Fair use") is True
+    assert parse_non_free("false", "Non-free logo") is True
+    assert parse_non_free("false", "CC BY-SA 4.0") is False
+    assert "@" not in DEFAULT_UA and "example.invalid" not in DEFAULT_UA
+
     assert sanitize_thumb_url("https://evil.example.com/x.jpg") is None
     assert sanitize_thumb_url("https://thumb.wikimedia.org/wikipedia/commons/a/b.jpg?foo=1") is None
     assert parse_retry_after("17") == 17.0
     assert BACKOFF_SECONDS == (5, 10, 20, 40, 80)
 
-    print("SELF-TEST PASS: pageimages, continue, utm stripping, html artist, missing commons, truncation OK")
+    print(
+        "SELF-TEST PASS: pageimages, continue, utm stripping, html artist, license_url, "
+        "non_free, missing commons, truncation OK"
+    )
     return 0
 
 
@@ -747,12 +881,17 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         default=None,
-        help="Process only the first N articles per language (dry run).",
+        help="Process only the first N articles per language (or files in --credits-only).",
     )
     parser.add_argument(
         "--restart",
         action="store_true",
-        help="Ignore saved progress file for the selected language(s).",
+        help="Ignore saved progress (or clear credit_checked_at in --credits-only mode).",
+    )
+    parser.add_argument(
+        "--credits-only",
+        action="store_true",
+        help="Backfill Commons credits for article_image rows where credit_checked_at IS NULL.",
     )
     parser.add_argument(
         "--self-test",
@@ -766,6 +905,116 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-name", default=os.environ.get("DB_NAME", "wikirag"))
     parser.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
     return parser.parse_args()
+
+
+def run_credits_only(
+    con,
+    client: PoliteClient,
+    *,
+    restart: bool,
+    limit: int | None,
+) -> int:
+    """Refresh Commons credit metadata for existing article_image rows without calling Wikipedia."""
+    t_start = time.monotonic()
+    req_start = client.request_count
+
+    cur = con.cursor()
+    try:
+        if restart:
+            cur.execute("UPDATE article_image SET credit_checked_at = NULL")
+            con.commit()
+        cur.execute(
+            "SELECT DISTINCT file_name FROM article_image "
+            "WHERE credit_checked_at IS NULL ORDER BY file_name"
+        )
+        file_names = [str(row[0]) for row in cur.fetchall()]
+    finally:
+        cur.close()
+
+    if limit is not None:
+        file_names = file_names[:limit]
+
+    chunks = _split_commons_chunks(file_names)
+    total_chunks = len(chunks)
+    updated_cnt = 0
+    missing_cnt = 0
+    non_free_cnt = 0
+    artist_null_credit_cnt = 0
+    failed_chunks = 0
+
+    print(
+        f"[credits] starting: files={len(file_names)} chunks={total_chunks}",
+        flush=True,
+    )
+
+    for chunk_idx, chunk in enumerate(chunks, start=1):
+        try:
+            parsed = fetch_commons_chunk(client, chunk)
+            present_rows: list[tuple[str | None, str | None, str | None, int, str]] = []
+            missing_rows: list[tuple[str]] = []
+
+            for name in chunk:
+                meta = parsed.get(name)
+                if meta is None:
+                    missing_cnt += 1
+                    missing_rows.append((name,))
+                    continue
+                if meta.non_free:
+                    non_free_cnt += 1
+                    print(f"  non_free file: {name} (license={meta.license!r})", flush=True)
+                if meta.artist is None and meta.has_credit:
+                    artist_null_credit_cnt += 1
+                present_rows.append(
+                    (
+                        meta.license,
+                        meta.license_url,
+                        meta.artist,
+                        1 if meta.non_free else 0,
+                        name,
+                    )
+                )
+
+            wcur = con.cursor()
+            try:
+                if present_rows:
+                    wcur.executemany(UPDATE_CREDITS_SQL, present_rows)
+                    if wcur.rowcount > 0:
+                        updated_cnt += wcur.rowcount
+                if missing_rows:
+                    wcur.executemany(MARK_MISSING_CREDITS_SQL, missing_rows)
+                    if wcur.rowcount > 0:
+                        updated_cnt += wcur.rowcount
+                con.commit()
+            finally:
+                wcur.close()
+
+            if chunk_idx % 20 == 0 or chunk_idx == total_chunks:
+                print(
+                    f"[credits] chunk {chunk_idx}/{total_chunks}: updated={updated_cnt} "
+                    f"missing_on_commons={missing_cnt} non_free={non_free_cnt} "
+                    f"artist_null_credit_present={artist_null_credit_cnt} "
+                    f"requests={client.request_count - req_start}",
+                    flush=True,
+                )
+        except Exception as exc:
+            con.rollback()
+            failed_chunks += 1
+            print(
+                f"FAILED CHUNK [credits] chunk {chunk_idx}/{total_chunks} "
+                f"files={chunk[0]}..{chunk[-1]} (n={len(chunk)}): {exc}",
+                flush=True,
+            )
+
+    elapsed_s = time.monotonic() - t_start
+    total_requests = client.request_count - req_start
+    print(
+        f"SUMMARY credits files={len(file_names)} requests={total_requests} "
+        f"updated={updated_cnt} missing_on_commons={missing_cnt} "
+        f"non_free={non_free_cnt} artist_null_credit_present={artist_null_credit_cnt} "
+        f"failed_chunks={failed_chunks} elapsed_s={elapsed_s:.1f}",
+        flush=True,
+    )
+    return 1 if failed_chunks > 0 else 0
 
 
 def main() -> int:
@@ -787,12 +1036,6 @@ def main() -> int:
     user_agent = os.environ.get("WIKIMEDIA_UA") or DEFAULT_UA
     print(f"User-Agent: {user_agent}", flush=True)
 
-    progress = load_progress(args.progress_file)
-    target_langs = (args.lang,) if args.lang else LANGS
-    if args.restart:
-        for lang in target_langs:
-            progress.pop(lang, None)
-
     con = connect_db(
         host=args.db_host,
         port=args.db_port,
@@ -801,6 +1044,24 @@ def main() -> int:
         database=args.db_name,
     )
     client = PoliteClient(user_agent=user_agent)
+
+    if args.credits_only:
+        try:
+            return run_credits_only(
+                con,
+                client,
+                restart=args.restart,
+                limit=args.limit,
+            )
+        finally:
+            con.close()
+
+    progress = load_progress(args.progress_file)
+    target_langs = (args.lang,) if args.lang else LANGS
+    if args.restart:
+        for lang in target_langs:
+            progress.pop(lang, None)
+
     commons_cache: dict[str, CommonsMeta | None] = {}
     total_failed_batches = 0
 
@@ -853,7 +1114,7 @@ def main() -> int:
                 batch_ids = pending_ids[offset : offset + BATCH_SIZE]
                 try:
                     pi_res = fetch_pageimages_batch(client, lang, batch_ids)
-                    batch_rows: list[tuple[str, int, str, str, str | None, str | None]] = []
+                    batch_rows: list[tuple[str, int, str, str, str | None, str | None, str | None, int]] = []
                     batch_dropped = pi_res.non_commons_dropped
 
                     if pi_res.candidates:
@@ -874,7 +1135,9 @@ def main() -> int:
                                     cand.file_name,
                                     cand.thumb_url,
                                     meta.license,
+                                    meta.license_url,
                                     meta.artist,
+                                    1 if meta.non_free else 0,
                                 )
                             )
 
