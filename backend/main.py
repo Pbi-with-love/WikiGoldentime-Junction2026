@@ -28,7 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 # Ensure SVT defaults to the merged 3307 server unless explicitly overridden.
 os.environ.setdefault("DB_PORT", "3307")
 
-from backend import ask, compare, history, rag_common, summary, svt_common  # noqa: E402
+from backend import ask, compare, history, rag_common, summary, svt_common, threads  # noqa: E402
 
 if svt_common.DB["port"] == 3308 and os.environ.get("DB_PORT") != "3308":
     svt_common.DB["port"] = int(os.environ.get("SVT_DB_PORT", 3307))
@@ -651,6 +651,11 @@ def get_summary(lang: str, page_id: int, background_tasks: BackgroundTasks, ui: 
 @app.get("/api/compare/{lang}/{page_id}")
 def get_compare(lang: str, page_id: int):
     return compare.get_compare_response(lang, page_id)
+
+
+@app.get("/api/threads/{lang}/{page_id}")
+def get_threads(lang: str, page_id: int, exclude: str = ""):
+    return threads.get_threads_response(lang, page_id, exclude)
 
 
 @app.get("/api/ask")
