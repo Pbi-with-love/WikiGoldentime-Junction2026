@@ -1,0 +1,98 @@
+{
+ "390x844-en": {
+  "legend": {
+   "l": 16,
+   "r": 303,
+   "t": 664,
+   "b": 682
+  },
+  "edits": {
+   "l": 280,
+   "r": 372,
+   "t": 674,
+   "b": 691
+  },
+  "slider": {
+   "l": 16,
+   "r": 374,
+   "t": 674,
+   "b": 832
+  },
+  "outline": {
+   "l": 142,
+   "r": 372,
+   "t": 292,
+   "b": 664
+  },
+  "vw": 390,
+  "vh": 844,
+  "legendHitsOutline": false,
+  "editsHitsOutline": false,
+  "edgeMin": 18,
+  "errors": 0
+ },
+ "390x844-fi": {
+  "legend": {
+   "l": 16,
+   "r": 330,
+   "t": 664,
+   "b": 682
+  },
+  "edits": {
+   "l": 216,
+   "r": 372,
+   "t": 657,
+   "b": 674
+  },
+  "slider": {
+   "l": 16,
+   "r": 374,
+   "t": 657,
+   "b": 832
+  },
+  "outline": {
+   "l": 140,
+   "r": 381,
+   "t": 259,
+   "b": 647
+  },
+  "vw": 390,
+  "vh": 844,
+  "legendHitsOutline": false,
+  "editsHitsOutline": false,
+  "edgeMin": 9,
+  "errors": 0
+ },
+ "1280x720-en": {
+  "legend": {
+   "l": 28,
+   "r": 321,
+   "t": 568,
+   "b": 586
+  },
+  "edits": {
+   "l": 881,
+   "r": 973,
+   "t": 585,
+   "b": 602
+  },
+  "slider": {
+   "l": 28,
+   "r": 1252,
+   "t": 585,
+   "b": 706
+  },
+  "outline": {
+   "l": 654,
+   "r": 898,
+   "t": 189,
+   "b": 575
+  },
+  "vw": 1280,
+  "vh": 720,
+  "legendHitsOutline": false,
+  "editsHitsOutline": false,
+  "edgeMin": 145,
+  "errors": 0
+ }
+}

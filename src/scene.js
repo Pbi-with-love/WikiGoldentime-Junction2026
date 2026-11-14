@@ -755,7 +755,14 @@ export function createGalaxyScene({
     const headerRect = headerEl && !headerEl.hidden ? headerEl.getBoundingClientRect() : null;
     const sliderRect = sliderEl && !sliderEl.hidden ? sliderEl.getBoundingClientRect() : null;
     const safeTop = (headerRect && headerRect.height > 0 ? headerRect.bottom : 0) + margin;
-    const safeBottom = (sliderRect && sliderRect.height > 0 ? sliderRect.top : h) - margin;
+    // Spec 033: in portrait the legend sits right above the slider; keep the map above it too.
+    const legendEl = document.getElementById("sky-legend");
+    const legendRect = isPortraitGeo && legendEl && !legendEl.hidden ? legendEl.getBoundingClientRect() : null;
+    const bottomEdge = Math.min(
+      sliderRect && sliderRect.height > 0 ? sliderRect.top : h,
+      legendRect && legendRect.height > 0 ? legendRect.top : h
+    );
+    const safeBottom = bottomEdge - margin;
     const safeLeft = margin;
     const safeRight = w - margin;
     cachedSafeArea = {

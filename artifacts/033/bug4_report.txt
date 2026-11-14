@@ -1,0 +1,9 @@
+Spec 033 bug 4 (390 px geography legend). Fix: styles.css @media (max-width:480px) .legend {bottom:190px}; scene.js refreshUiMetrics: in portrait the safe-area bottom is min(slider top, legend top) - 8.
+Rects (px, from bug4_before.json / bug4_after.json):
+390x844 en  BEFORE legend y664-682, outline x142-372 y292-664 (touches legend), legend overlapped "Edits per month" (y674-691), outline edge min 18
+            AFTER  legend y636-654, outline x147-355 y292-627, edit caption y674-691 (clear), edge min 35
+390x844 fi  BEFORE legend y664-682, outline x140-381 y259-647, "Muokkauksia..." caption y657-674 overlapped legend, edge min 9
+            AFTER  legend y636-654, outline x143-372 y259-627, caption y657-674 (clear), edge min 18
+1280x720 en BEFORE and AFTER identical: outline x654-898 y189-575, legend y568-586 (no change)
+bug4_labels.mjs: all projected labels inside viewport, none over header/timeline (390 en/fi, 1280 en). Console errors 0. npm test 35/35.
+Screenshots: artifacts/screenshots/033/09-geo-390-en.png, 10-geo-390-fi.png, 11-geo-1280-en.png (+ *-before.png).

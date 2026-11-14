@@ -3205,6 +3205,10 @@ a:focus-visible,
     flex-wrap: wrap;
     max-width: 100%;
   }
+  /* Spec 033: lift the legend clear of the slider's "Edits per month" caption. */
+  .legend {
+    bottom: 190px;
+  }
   .projected-lens-guide {
     font-size: 0.75rem;
     padding: 2px 6px;
