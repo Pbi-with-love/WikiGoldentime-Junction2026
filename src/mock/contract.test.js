@@ -239,13 +239,28 @@ test("GET /api/asof/{page_id} and GET /api/diff/{page_id} support Demo Path B (2
   assert.ok(diff.parts.some((p) => p.op === "edit" && Array.isArray(p.words)));
 });
 
-test("GET /api/ask supports Demo Path A (How did the Winter War end -> 52097, 3 milestones)", async () => {
+test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () => {
   const res = await ask("How did the Winter War end");
-  if (MOCK.ask) assert.ok(res.answer.includes("[mock]"));
-  assert.deepEqual(res.top, { lang: "fi", page_id: 52097 });
   assert.equal(res.history_available, true);
-  assert.equal(res.milestones.length, 3);
   assert.ok(res.sources.length >= 1);
+
+  if (MOCK.ask) {
+    assert.ok(res.answer.includes("[mock]"));
+    assert.deepEqual(res.top, { lang: "fi", page_id: 52097 });
+    assert.equal(res.milestones.length, 3);
+  } else {
+    assert.ok(!res.answer.includes("[mock]"));
+    assert.equal(res.pending, false);
+    assert.equal(res.top.lang, "fi");
+    assert.equal(typeof res.top.page_id, "number");
+    assert.ok(res.milestones.length >= 2);
+    assert.ok(Array.isArray(res.facts));
+    for (const fact of res.facts) {
+      assert.equal(typeof fact.text, "string");
+      assert.ok(typeof fact.source_sentence === "string" && fact.source_sentence.length > 0);
+      assert.ok(typeof fact.url === "string" && fact.url.includes("oldid="));
+    }
+  }
 
   for (const ms of res.milestones) {
     assert.equal(typeof ms.from_year, "number");
@@ -253,10 +268,24 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end -> 52097, 3 
     assert.equal(typeof ms.answer, "string");
     assert.equal(typeof ms.rev_id, "number");
     assert.equal(typeof ms.user, "string");
+    if (!MOCK.ask) {
+      assert.equal(typeof ms.found, "boolean");
+      assert.ok(typeof ms.url === "string" && ms.url.includes("oldid="));
+      assert.ok(Array.isArray(ms.facts));
+      for (const fact of ms.facts) {
+        assert.ok(typeof fact.source_sentence === "string" && fact.source_sentence.length > 0);
+        assert.ok(typeof fact.url === "string" && fact.url.includes("oldid="));
+      }
+    }
   }
 
   // Non-history article ask returns history_available=false and empty milestones
-  const noHist = await ask("Vinterkriget");
+  const noHistQuery = MOCK.ask ? "Vinterkriget" : "Who was Carl Ludvig Engel?";
+  const noHist = await ask(noHistQuery);
+  if (!MOCK.ask) {
+    assert.equal(noHist.pending, false);
+    assert.ok(!noHist.answer.includes("[mock]"));
+  }
   assert.equal(noHist.history_available, false);
   assert.deepEqual(noHist.milestones, []);
 });

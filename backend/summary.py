@@ -670,6 +670,7 @@ def _call_llm_json(
     model: str,
     schema: dict[str, Any],
     user_content: str,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> tuple[dict[str, Any] | None, int, int]:
     """Call the Anthropic Messages API with strict JSON schema output.
 
@@ -683,7 +684,7 @@ def _call_llm_json(
                 "effort": "low",
                 "format": {"type": "json_schema", "schema": schema},
             },
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
     except Exception as exc:
