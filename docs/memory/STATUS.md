@@ -37,6 +37,17 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
   project in the Orca UI and re-add it as git before the next parallel run.
 
+## User decisions 16:10 UTC — multilingual is CORE (mentor asked; native sv/en articles exist)
+- Rule: native first, translation second. 016 Summarize multilingual (native sibling summary by
+  wikidata_id; else translate fi text only, label "Machine-translated from Finnish Wikipedia", keep
+  source sentences/structure/history/ghosts; source-JSON hash, re-translate on mismatch; history only
+  from fi, label "Edit history of Finnish Wikipedia"; same hash staleness for Ask (on top of 015)).
+- 017 cross-language compare: per fi section best sv/en chunk by cosine (same wikidata_id), threshold
+  reported; "Also in English/Swedish Wikipedia" vs "Only in Finnish Wikipedia". Hero: report what
+  sv/en say about the treaty date -> docs/memory/research/hero-sv-en-treaty.md; do NOT change the demo
+  story until the user has seen it.
+- Order: 015 (running) -> 016 -> 017 (Argon design step for 017).
+
 ## User decisions 14:05 UTC
 - 011: compare snapshots by sha1; lang='fi' for every row (dataset M is Finnish only).
 - Parallel workers: re-register the project in Orca as a git repo, then `--worktree new-child` for every
@@ -96,7 +107,7 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 
 ## Specs
 - 014-display-fixes | done | html.unescape in /api/asof + /api/diff (0 '&ndash;' on asof 1256 @2006), Ask strip = milestones-1 changes, 1 milestone -> 'has not changed since {year}' fi/sv/en; npm test 16/16 (orchestrator rerun), VPS pytest 25/25, 5 screenshots artifacts/screenshots/014-display-fixes/ |
-- 015-ask-ui-translate-only | spec in writing | BUG found 15:55 UTC: ?ui= rebuilds the whole ask pipeline -> different milestones; hero ui=en 2006 changed_by 2082029 (default 1862876). Fix: ui variant = translation of the default answer |
+- 015-ask-ui-translate-only | in progress (Hydrogen ctx_16639b60157e) | BUG found 15:55 UTC: ?ui= rebuilds the whole ask pipeline -> different milestones; hero ui=en 2006 changed_by 2082029 (default 1862876). Fix: ui variant = translation of the default answer |
 <!-- id | state | evidence -->
 - kaamos-sky: 3D galaxy canvas (29,460 stars), Kaamos palette, search with "also" language dots, 2003–2026 edit-histogram time slider (`src/timeslider.js`), responsive article panel, `prefers-reduced-motion` | done | `docs/design/001-kaamos-sky.md`, `src/scene.js`, `src/ui.js`, `src/styles.css`; `artifacts/screenshots/001-kaamos-sky/` (7 PNGs); `npm run build` OK
 - mock-api-and-through-time: async mock layer in `src/api.js` (`USE_MOCK = true`, `?mockError=1`, 80–300 ms latency) + Through time tab (`timeline`, `asof`, word `diff`) | done | `src/api.js`, `src/mock/index.js`, `src/mock/stars.js`, `src/mock/fixtures.js`; `npm test` (`GET /api/stars`, `/search`, `/article`, `/timeline`, `/asof`, `/diff`, error mode in 11/11 pass); Playwright Chromium `#tab-view-history` check OK
