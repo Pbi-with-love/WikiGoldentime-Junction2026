@@ -12,17 +12,17 @@ the text it was given and is cached in MariaDB, so the demo never waits for the 
 
 ## Demo script (3.5 minutes, final)
 
-Labels are the real button names on the deployed build, checked in dry run 3
-(`docs/memory/research/demo-dryrun-3.md`, bundles `index-zLNeP6kO.js` and `index-BVyARc13.js`).
+Labels are the real button names on the deployed build, checked in dry run 4
+(`docs/memory/research/demo-dryrun-4.md`, bundle `index-BKdWSYhL.js`).
 Start in the **English** UI (`English`, top right). Times in brackets are speaking time.
 
 **Warm-up, 5 minutes before going on stage** (laptop at 1280×720 or larger, tunnel open):
 1. Open the app and wait 10 s until the slider reads **2026** (or click once anywhere: the intro
    sweep then jumps to 2026).
 2. Click the chip **How did the Winter War end?**, click the **2006–2020** card (warms the diff,
-   ~1.4 s cold), then **Close**.
+   0.4–1.9 s), then **Close**.
 3. Search `talvisota`, open *Talvisota*, click **Through Time** -> **As of 2006** (warms AS OF,
-   ~2.5 s cold), then **See as a road** and **Back to the sky**.
+   0.2–2.6 s, varies), then **See as a road** and **Back to the sky**.
 4. Click **Suomi**, open *Talvisota*, **Tiivistä**, then **Takaisin taivaalle**, click **English**.
 5. Reload the page and wait for **2026** again. Keep a second tab with the same state as backup.
 
@@ -51,13 +51,15 @@ Start in the **English** UI (`English`, top right). Times in brackets are speaki
    open *Talvisota*, click **Tiivistä**: "13 osiota · 35 min → 2 min". Say: "One card per section,
    each fact with its source sentence; faded cards are sections that were deleted in the past."
    Click **Seuraava** 8 times to **Osio 5 / 13** *Moskovan rauha* ("muokattu uudelleen 14 kertaa").
-   Point at **Myös ruotsinkielisessä Wikipediassa** (section *Fredsavtalet*) only. Say: "For each
-   Finnish section we find the closest Swedish and English passage with vector distance." Do not
-   point at the English passage under it (*Foreign support*, a weak match until spec 027 is deployed).
-   Click **Takaisin taivaalle**, then **English**.
+   Point at **Myös ruotsinkielisessä Wikipediassa** (section *Fredsavtalet*) and **Myös
+   englanninkielisessä Wikipediassa** (section *Soviet breakthrough in February*, spec 027). Say: "For
+   each Finnish section we find the closest Swedish and English passage with vector distance."
+   Optional (needs ~5–11 s, the galaxy reloads): click **Svenska** in the top right, the trail
+   reopens on *Fredsavtalet* (Avsnitt 4 av 6); **English** reopens on *Soviet breakthrough in
+   February* (Section 7 of 9). Click **Takaisin taivaalle** (or switch back), then **English**.
 5. **Through time and edit wars (30 s).** Search `talvisota`, open *Talvisota*, click **Through
    Time**: "2,143 versions · 328 reverts · 88 disputes · 7 edit-war months". Click **As of 2006**
-   (~2.5 s; talk through it): "2006 · Edited by Höyhens on 29 Dec 2006 · oldid=2114325", and the
+   (usually 0.2 s, sometimes 1–2.6 s; talk through it): "2006 · Edited by Höyhens on 29 Dec 2006 · oldid=2114325", and the
    slider and galaxy move to 2006 too. Say: "A plain `SELECT … FOR SYSTEM_TIME AS OF` on the
    system-versioned table, 862,076 real revisions."
 6. **Geography (10 s).** **Close** the panel and the search list, click **Geography** (~3 s
@@ -75,8 +77,9 @@ Start in the **English** UI (`English`, top right). Times in brackets are speaki
   sentencing (Porvari, oldid=22360610). A truly new question takes ~25 s ("Preparing the answer from
   Wikipedia's history…", then "Translating answer into English…") and arrives by itself; only do it
   if there is time, and do not click while it runs.
-- Language question from judges: click **Svenska**, the chip question shows "Maskinöversatt från
-  engelska" and "Detta svar ändrades 3 gånger"; in Finnish ask `Miten talvisota päättyi?`
+- Language question from judges: click **Svenska**, the chip question shows "Baserat på Wikipedia
+  (engelska, svenska, finska)" and "Detta svar ändrades 4 gånger" (2003–2004, 2005, 2006–2008,
+  2009–2025, 2026; the en and fi answers say 3 times); in Finnish ask `Miten talvisota päättyi?`
   ("Perustuu Wikipedia-artikkeleihin (suomi)", 2006–2010 "Muokannut Whiskey~fiwiki (7.11.2006)").
 
 Do not use demo questions 32, 34 or 39 from `data/demo-questions.tsv` (1-based). Their top article is
@@ -146,8 +149,7 @@ the real treaty-date edit was placed one period late. Now a milestone needs a ch
 - Change detection uses numbers only. Edits that change only names or wording are missed.
 - Compare recall is 0.747: about 1 in 4 real matches is missed (e.g. Talvisota *Joukot* vs Swedish
   *Styrkeförhållanden*, 0.381). Some matches are only cosmetic (the fi notes section "Huomautuksia"
-  matches an English notes chunk), and a match can point to a weak passage (fi *Moskovan rauha* ->
-  en *Foreign support*).
+  matches an English notes chunk), and a match can point to a weak passage.
 - History exists only for Finnish (dataset M). Swedish and English summaries show the **Finnish**
   edit history next to them. 12 listed articles were missing from the dumps.
 - Some demo questions miss: 32, 34 and 39 retrieve the wrong top article, and [38] finds no answer at all.
