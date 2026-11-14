@@ -87,9 +87,10 @@ Each endpoint switches from mock to real on its own flag, after the contract tes
 | Table | DB | Used by | Built by |
 |---|---|---|---|
 | `article_coord(lang, page_id, x, y, z)` | wikirag | stars | `scripts/umap_coords.py` |
-| `article_image(lang, page_id, file_name, thumb_url)` | wikirag | article | `scripts/fetch_images.py` |
+| `article_image(lang, page_id, file_name, thumb_url, license, artist)` | wikirag | article | `scripts/fetch_images.py` |
 | `history_stats(page_id, first_edit, versions, reverts, disputes, war_months)` | wikihistory | stars, timeline | `scripts/history_stats.py` |
 | `month_stats(page_id, month, edits, reverts, disputes)` | wikihistory | timeline | `scripts/history_stats.py` |
+| `global_month_stats(month, edits, reverts, disputes)` | wikihistory | timeline (global) | `scripts/history_stats.py` |
 | `chunk`, `chunk_vector` | wikirag | search, ask | `scripts/chunk.py`, `scripts/embed_chunks.py` |
 | `summary_cache(lang, page_id, rev_id, json)` | wikirag | summary | on demand + pre-warm |
 | `answer_cache(q_hash, json)` | wikirag | ask | on demand + pre-warm |

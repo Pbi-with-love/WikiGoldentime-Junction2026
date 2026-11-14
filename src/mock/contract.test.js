@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  MOCK,
   getStars,
   search,
   getArticle,
@@ -11,9 +12,32 @@ import {
   ask,
   getThreads,
   getRoad,
+  getTopicRoad,
+  getSummary,
 } from "../api.js";
 import { setMockConfig } from "./index.js";
 import { ANNUAL_VERSIONS_CALIBRATION } from "./fixtures.js";
+
+const realEnv = process.env.REAL?.trim() ?? "";
+if (realEnv) {
+  const validKeys = Object.keys(MOCK);
+  const realKeys = realEnv.split(",").map((k) => k.trim());
+  for (const key of realKeys) {
+    if (!Object.hasOwn(MOCK, key)) {
+      throw new Error(
+        `Unknown REAL key "${key}". Valid keys: ${validKeys.join(", ")}`
+      );
+    }
+  }
+  if (!process.env.API_BASE?.trim()) {
+    throw new Error(
+      "API_BASE must be set when REAL is non-empty (Node fetch needs an absolute URL, e.g. API_BASE=http://127.0.0.1:8002)."
+    );
+  }
+  for (const key of realKeys) {
+    MOCK[key] = false;
+  }
+}
 
 // Keep contract tests fast while still testing latency and error modes explicitly
 setMockConfig({ error: false, latency: false });
@@ -211,7 +235,7 @@ test("GET /api/asof/{page_id} and GET /api/diff/{page_id} support Demo Path B (2
 
 test("GET /api/ask supports Demo Path A (How did the Winter War end -> 52097, 3 milestones)", async () => {
   const res = await ask("How did the Winter War end");
-  assert.ok(res.answer.includes("[mock]"));
+  if (MOCK.ask) assert.ok(res.answer.includes("[mock]"));
   assert.deepEqual(res.top, { lang: "fi", page_id: 52097 });
   assert.equal(res.history_available, true);
   assert.equal(res.milestones.length, 3);
@@ -302,8 +326,8 @@ test("GET /api/road/{lang}/{page_id} returns station-based Talvitie fixtures (Ta
     assert.equal(st.heading, heading);
     assert.equal(st.words, words);
     assert.equal(st.reading_minutes, mins);
-    assert.ok(st.summary.includes("[mock]"));
-    assert.ok(st.text.includes("[mock]"));
+    if (MOCK.road) assert.ok(st.summary.includes("[mock]"));
+    if (MOCK.road) assert.ok(st.text.includes("[mock]"));
     assert.ok(Array.isArray(st.facts) && st.facts.length <= 3);
     assert.ok(Array.isArray(st.years));
     assert.ok(Array.isArray(st.posts));
@@ -319,7 +343,7 @@ test("GET /api/road/{lang}/{page_id} returns station-based Talvitie fixtures (Ta
   assert.equal(talviRoad.stations[0].posts.length, 9);
   assert.deepEqual(talviRoad.stations[11].years, []);
   assert.equal(talviRoad.ghost_stations.length, 1);
-  assert.ok(talviRoad.ghost_stations[0].text.includes("[mock]"));
+  if (MOCK.road) assert.ok(talviRoad.ghost_stations[0].text.includes("[mock]"));
 
   // Suomen sisällissota (1150) — 11 stations
   const sisallisRoad = await getRoad("fi", 1150);
@@ -352,12 +376,11 @@ test("GET /api/road/{lang}/{page_id} returns station-based Talvitie fixtures (Ta
 });
 
 test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suomen sisällissota, Autonomian aika)", async () => {
-  const { getTopicRoad } = await import("../api.js");
   const autonomia = await getTopicRoad({ category: "Autonomian aika" });
   assert.equal(autonomia.topic.category, "Autonomian aika");
   assert.ok(Array.isArray(autonomia.eras) && autonomia.eras.length >= 3);
   assert.ok(Array.isArray(autonomia.events) && autonomia.events.length >= 10);
-  assert.ok(autonomia.events[0].summary_short.includes("[mock]"));
+  if (MOCK["topic-road"]) assert.ok(autonomia.events[0].summary_short.includes("[mock]"));
 
   const talviTopic = await getTopicRoad({ lang: "fi", page_id: 1256 });
   assert.equal(talviTopic.topic.title, "Talvisota");
@@ -369,21 +392,21 @@ test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suom
 });
 
 test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatkosota, and short-article overview-only responses", async () => {
-  const { getSummary } = await import("../api.js");
-
   // 1. Talvisota (1256): 13 sections + 1 ghost_section
   const talviSummary = await getSummary("fi", 1256);
   assert.equal(talviSummary.article.title, "Talvisota");
   assert.equal(talviSummary.article.words, 8395);
   assert.equal(talviSummary.article.reading_minutes, 35);
-  assert.ok(talviSummary.tldr.includes("[mock]"));
+  if (MOCK.summary) assert.ok(talviSummary.tldr.includes("[mock]"));
   assert.ok(Array.isArray(talviSummary.facts) && talviSummary.facts.length > 0 && talviSummary.facts.length <= 3);
   assert.equal(talviSummary.sections.length, 13);
   assert.equal(talviSummary.ghost_sections.length, 1);
   for (const sec of talviSummary.sections) {
-    assert.ok(sec.one_line.includes("[mock]"));
-    assert.ok(sec.summary.includes("[mock]"));
-    assert.ok(sec.text.includes("[mock]"));
+    if (MOCK.summary) {
+      assert.ok(sec.one_line.includes("[mock]"));
+      assert.ok(sec.summary.includes("[mock]"));
+      assert.ok(sec.text.includes("[mock]"));
+    }
     assert.ok(sec.history && typeof sec.history.changes === "number");
   }
 
@@ -400,18 +423,18 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
   assert.equal(jatkoSummary.sections[2].heading, "Hyökkäysvaihe");
   assert.equal(jatkoSummary.sections[3].heading, "Asemasotavaihe");
   assert.equal(jatkoSummary.ghost_sections.length, 1);
-  assert.ok(jatkoSummary.tldr.includes("[mock]"));
+  if (MOCK.summary) assert.ok(jatkoSummary.tldr.includes("[mock]"));
 
   // 4. Short article (sv:426533 Moskvafreden, < 1,500 words / < 4 sections) -> Card 0 only (sections: [])
   const shortSummary = await getSummary("sv", 426533);
   assert.equal(shortSummary.article.title, "Moskvafreden");
-  assert.ok(shortSummary.tldr.includes("[mock]"));
+  if (MOCK.summary) assert.ok(shortSummary.tldr.includes("[mock]"));
   assert.ok(Array.isArray(shortSummary.facts) && shortSummary.facts.length <= 3);
   assert.deepEqual(shortSummary.sections, []);
   assert.deepEqual(shortSummary.ghost_sections, []);
 });
 
-test("Simulated error mode (?mockError=1 / setMockConfig) rejects properly", async () => {
+test("Simulated error mode (?mockError=1 / setMockConfig) rejects properly", { skip: !MOCK.stars }, async () => {
   setMockConfig({ error: true, latency: false });
   await assert.rejects(() => getStars(), /Simulated network error/);
   setMockConfig({ error: false, latency: true });
