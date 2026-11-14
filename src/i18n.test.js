@@ -379,3 +379,136 @@ test("028 saveViewState and consumeViewState round-trip views, consume once, and
   assert.equal(saveViewState({ view: "sky" }, throwingStorage), false);
   assert.equal(consumeViewState(throwingStorage), null);
 });
+
+test("031 normalizeViewState / saveViewState / consumeViewState handle cardRef round-trip and garbage", () => {
+  const store = new Map();
+  const mockStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+
+  // Valid section cardRef round-trip + unknown keys stripped + string capped at 200 chars
+  const longHeading = "H".repeat(250);
+  const savedOk = saveViewState(
+    {
+      view: "summary",
+      article: { lang: "fi", page_id: 1256 },
+      cardIndex: 7,
+      cardRef: {
+        kind: "section",
+        articleLang: "fi",
+        articlePageId: 1256,
+        totalSections: 13,
+        no: 5,
+        heading: longHeading,
+        pos: 4,
+        injectedKey: "should-be-stripped",
+      },
+    },
+    mockStorage
+  );
+  assert.equal(savedOk, true);
+  const restored = consumeViewState(mockStorage);
+  assert.equal(restored.cardIndex, 7);
+  assert.deepEqual(restored.cardRef, {
+    kind: "section",
+    articleLang: "fi",
+    articlePageId: 1256,
+    totalSections: 13,
+    no: 5,
+    heading: "H".repeat(200),
+    pos: 4,
+  });
+  assert.equal("injectedKey" in restored.cardRef, false);
+
+  // Valid ghost cardRef round-trip
+  saveViewState(
+    {
+      view: "summary",
+      article: { lang: "fi", page_id: 1256 },
+      cardIndex: 1,
+      cardRef: {
+        kind: "ghost",
+        articleLang: "sv",
+        articlePageId: 23612,
+        totalSections: 6,
+        afterNo: 0,
+        fromYear: 2005,
+        oldid: 6022332,
+        heading: "Sodan alku",
+        fromFi: true,
+        extra: 99,
+      },
+    },
+    mockStorage
+  );
+  const restoredGhost = consumeViewState(mockStorage);
+  assert.deepEqual(restoredGhost.cardRef, {
+    kind: "ghost",
+    articleLang: "sv",
+    articlePageId: 23612,
+    totalSections: 6,
+    afterNo: 0,
+    fromYear: 2005,
+    oldid: 6022332,
+    heading: "Sodan alku",
+    fromFi: true,
+  });
+
+  // Valid overview & fiHistory round-trip
+  for (const kind of ["overview", "fiHistory"]) {
+    const out = normalizeViewState({
+      view: "summary",
+      article: { lang: "fi", page_id: 1256 },
+      cardIndex: 0,
+      cardRef: { kind, articleLang: "en", articlePageId: 33924, totalSections: 9, junk: true },
+    });
+    assert.deepEqual(out.cardRef, {
+      kind,
+      articleLang: "en",
+      articlePageId: 33924,
+      totalSections: 9,
+    });
+  }
+
+  // Missing cardRef (old 028 saved state) keeps cardIndex and sets cardRef = null
+  const legacy = normalizeViewState({
+    view: "summary",
+    article: { lang: "fi", page_id: 1256 },
+    cardIndex: 3,
+  });
+  assert.equal(legacy.cardIndex, 3);
+  assert.equal(legacy.cardRef, null);
+
+  // Invalid/garbage cardRef values are dropped to null without dropping the view state
+  const garbageRefs = [
+    "not-an-object",
+    123,
+    ["section"],
+    { kind: "unknown" },
+    { kind: "section", no: -1, heading: "X" },
+    { kind: "section", no: 1.5, heading: "X" },
+    { kind: "section", no: "5", heading: "X" },
+    { kind: "section", no: 5, heading: 42 },
+    { kind: "section", no: 5, heading: "X", pos: -2 },
+    { kind: "section", no: 5, heading: "X", articleLang: "de" },
+    { kind: "section", no: 5, heading: "X", articlePageId: -5 },
+    { kind: "section", no: 5, heading: "X", totalSections: -1 },
+    { kind: "ghost", afterNo: -1, fromYear: 2005, heading: "G" },
+    { kind: "ghost", afterNo: 0, fromYear: -1, heading: "G" },
+    { kind: "ghost", afterNo: 0, fromYear: 2005, oldid: -1, heading: "G" },
+    { kind: "ghost", afterNo: 0, fromYear: 2005, heading: null },
+  ];
+  for (const bad of garbageRefs) {
+    const res = normalizeViewState({
+      view: "summary",
+      article: { lang: "fi", page_id: 1256 },
+      cardIndex: 4,
+      cardRef: bad,
+    });
+    assert.ok(res !== null);
+    assert.equal(res.cardIndex, 4);
+    assert.equal(res.cardRef, null, `Expected bad cardRef ${JSON.stringify(bad)} to be dropped`);
+  }
+});

@@ -9,6 +9,7 @@ import {
   fallbackNoteText,
   setLang,
 } from "./i18n.js";
+import { describeSummaryCard } from "./summaryMap.js";
 
 /**
  * Determine provenance display for an Ask response.
@@ -3246,11 +3247,22 @@ export function createUI({
       if (!activeSummaryState) return null;
       const sd = activeSummaryState.summaryData || {};
       const req = sd.requested || sd.article || {};
+      const focusIdx = activeSummaryState.focusIdx || 0;
+      const currentItem =
+        activeSummaryState.items?.[focusIdx] || activeSummaryState.items?.[0] || null;
       return {
         lang: req.lang || sd.article?.lang || "fi",
         page_id: req.page_id ?? sd.article?.page_id ?? null,
-        focusIdx: activeSummaryState.focusIdx || 0,
+        focusIdx,
         readMoreOpen: Boolean(activeSummaryState.readMoreOpen),
+        cardRef: describeSummaryCard(currentItem, sd),
+      };
+    },
+    getSummaryTrailState() {
+      if (!activeSummaryState) return null;
+      return {
+        items: activeSummaryState.items || [],
+        summaryData: activeSummaryState.summaryData || null,
       };
     },
     getRoadViewState() {

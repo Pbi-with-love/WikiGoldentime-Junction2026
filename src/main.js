@@ -17,6 +17,7 @@ import { createGalaxyScene } from "./scene.js";
 import { createTimeSlider } from "./timeslider.js";
 import { createUI } from "./ui.js";
 import { lang as uiLang, applyStatic, t, saveViewState, consumeViewState } from "./i18n.js";
+import { buildSummaryCardList, mapSummaryCard } from "./summaryMap.js";
 
 const EDIT_WAR_DISPUTE_YEARS = {
   1256: [2007, 2008, 2013, 2014, 2017, 2022],
@@ -409,6 +410,7 @@ async function init() {
         year,
         article: sumState ? { lang: sumState.lang, page_id: sumState.page_id } : null,
         cardIndex: sumState?.focusIdx ?? 0,
+        cardRef: sumState?.cardRef ?? null,
         readMoreOpen: Boolean(sumState?.readMoreOpen),
         panelOpen,
         panelArticle,
@@ -528,6 +530,7 @@ async function init() {
     let page_id = null;
     let initialFocusIdx = 0;
     let initialReadMore = false;
+    let cardRef = null;
     if (typeof arg1 === "string") {
       lang = arg1 || "fi";
       page_id = arg2 !== null && arg2 !== undefined ? Number(arg2) : 1256;
@@ -540,6 +543,7 @@ async function init() {
         initialFocusIdx = Math.max(0, Math.floor(Number(arg1.focusIdx)));
       }
       initialReadMore = Boolean(arg1.readMoreOpen);
+      cardRef = arg1.cardRef || null;
     }
     if (page_id === null || page_id === undefined || Number.isNaN(Number(page_id))) {
       page_id = activeStar?.page_id ?? 1256;
@@ -562,25 +566,44 @@ async function init() {
 
     let summaryOpened = false;
     let pendingCompare = null;
+    let comparePromise = null;
     if (lang === "fi") {
-      getCompare("fi", page_id)
+      comparePromise = getCompare("fi", page_id)
         .then((compareData) => {
-          if (seq !== summaryLoadSeq) return;
+          if (seq !== summaryLoadSeq) return null;
           if (summaryOpened && ui.isSummaryTrailOpen()) {
             ui.attachSummaryCompare(compareData);
           } else {
             pendingCompare = compareData;
           }
+          return compareData;
         })
         .catch((err) => {
-          if (seq !== summaryLoadSeq) return;
+          if (seq !== summaryLoadSeq) return null;
           console.warn("Cross-language compare unavailable:", err);
+          return null;
         });
     }
 
     try {
       const summaryData = await getSummary(lang, page_id, uiLang);
       if (seq !== summaryLoadSeq) return;
+      let compareDataForMap = null;
+      if (cardRef && comparePromise) {
+        let timeoutId = null;
+        compareDataForMap = await Promise.race([
+          comparePromise,
+          new Promise((resolve) => {
+            timeoutId = setTimeout(() => resolve(null), 3000);
+          }),
+        ]);
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        if (seq !== summaryLoadSeq) return;
+      }
+      if (cardRef) {
+        const targetItems = buildSummaryCardList(summaryData);
+        initialFocusIdx = mapSummaryCard(cardRef, targetItems, summaryData, compareDataForMap);
+      }
       endLoading();
       ui.closeArticlePanel();
       sceneCtrl?.setThreads(null, [], currentYear);
@@ -900,6 +923,7 @@ async function init() {
           lang: saved.article.lang,
           page_id: saved.article.page_id,
           focusIdx: saved.cardIndex,
+          cardRef: saved.cardRef ?? null,
           readMoreOpen: saved.readMoreOpen,
         });
         if (saved.panelOpen && saved.panelArticle) {
