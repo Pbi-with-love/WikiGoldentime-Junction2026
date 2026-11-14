@@ -16,8 +16,46 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
   `system_versioning_insert_history = 1`; report honestly whether the vector index is used or it
   falls back to a scan (fine at ~1,000 vectors). LLM: Claude API key in VPS `~/wikimemory/.env`
   (`ANTHROPIC_API_KEY`, mode 600, never in the repo); tested OK with `claude-haiku-5-5`.
-- Server data: dataset S + vectors on 3307; dataset M 50 articles / 31,848 versions on 3308.
-  Not yet: DB merge, full dataset M, UMAP coordinates, images, chunks, summaries, LLM key.
+- Server data: dataset S + vectors on 3307; wikihistory (50 articles / 31,848 versions) on 3308 AND
+  merged into 3307 (spec 002). Done: UMAP coords, images, chunks table, summaries, ask, LLM key.
+
+## CHECKPOINT 2026-11-14 ~13:00 UTC (session handoff) — read this first
+Running on the VPS right now (tmux; `ssh -i ~/.ssh/id_serverTech -o IdentitiesOnly=yes root@72.61.20.120`):
+- `gputun`: SSH tunnel VPS 127.0.0.1:11435 -> Verda GPU box 65.108.33.70 (A100, root, same key)
+  Ollama bge-m3 (digest 790764642607, bound 127.0.0.1, OLLAMA_NUM_PARALLEL=4).
+- `embed_chain`: `embed_chunks.py --pages-from all --lang fi` then `--lang en` (sv already done),
+  OLLAMA_URL=http://127.0.0.1:11435, batch 64, ~21–35 chunks/s; logs `~/wikimemory/embed_{fi,en}.log`.
+  At checkpoint: chunk_vector 42,911 / 83,797. Never run two embed writers at once (vector index
+  lock error "Record has changed since last read").
+- `snapshots`: waits for embed_chain, then `snapshot_vectors.py` (repo `scripts/`) fills
+  `wikirag.snapshot_chunk_vector` (Dec-31 snapshots where sha1 changed, 50 history articles,
+  history.clean() -> chunk_article -> bge-m3) for the Way B spike; log `~/wikimemory/snapshots.log`.
+- `dl`: organizers' `download.py --all` fetching the 4 missing dataset-M dumps (download only, no load).
+- `api` (our FastAPI :8002), `app`/`tm`/`svt` (organizers' — never touch).
+Verified this session: numeric check GPU vs organizers' vectors cos >= 0.999869 (5 untruncated
+articles); write path: with index 1,437 rows/s vs no-index+index 1,609 rows/s (2,048 rows) — writes
+are not the bottleneck, kept writing into live chunk_vector with index.
+Next steps, in order (user's plan):
+1. When embed_chain ends: verify chunk_vector == chunk (83,797), run full hit@k
+   (`eval_chunks.py` on VPS, before/after), count article_vector truncated=1 per language
+   (known: fi 172 / sv 22 / en 96).
+2. Wait for `snapshots` to finish; report row count of snapshot_chunk_vector.
+3. Release GPU: `ssh root@65.108.33.70 'systemctl stop ollama; systemctl disable ollama'`,
+   `tmux kill-session -t gputun` on the VPS, then tell the user to delete the Verda instance.
+   Hard deadline Sun 15 Nov 19:00 UTC.
+4. Dispatch spec 012 (ask milestones fix) — rebuild answer_cache only after step 1. Then spec 013
+   (i18n fi/sv/en, UI language + ?ui= for summary/ask; language only, no ARIA/keyboard):
+   Argon design step first, runs after 012 (both edit backend/ask.py). 013 spec was being written
+   at handoff — check docs/specs/013-i18n.md exists; if not, re-run spec-writer.
+5. Dataset M full load: after `dl` finishes, ASK the user before loading (hours; 3308 is used by
+   the organizers' :8001), then rerun `scripts/db_merge.sh merge` and `history_stats.py`.
+Verified finding (Moscow treaty, hero question): treaty date really changed once, rev 1862876
+(2006-11-07, Whiskey~fiwiki, "illalla 12. maaliskuuta"); 2004-03-26 rev 12385 (007zoo) 13->12 and
+2004-07-10 rev 30486 (Hautala) back; removals 2005-11/2005-12/2008-01/2010-12 were vandalism reverted
+in 1–2 min. Current /api/ask milestones attribute the change one period late and count LLM rewording
+as changes -> spec 012.
+Open user items: Wikimedia User-Agent contact still placeholder (use repo URL); expose image
+license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3.15, harmless).
 
 ## Specs
 <!-- id | state | evidence -->
@@ -36,9 +74,11 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 005-history-stats | done | history_stats 50 / month_stats 5,331 / global_month_stats 279 rows, edits sum 31,848 (orchestrator recount); Talvisota 2143 versions, 328 reverts, 88 disputes, 7 war months = organizers' numbers; 6 unit tests; run 1.4 s, deterministic CHECKSUM |
 - 006-api-core | done | FastAPI on VPS 127.0.0.1:8002 (tmux api); orchestrator rerun: REAL=stars,search,article,timeline,asof,diff contract 10 pass/0 fail/1 skip (error-mode), mock 11/11; curl via tunnel: stars 0.32 s gz 1.7 MB, search 0.46 s, article 0.16 s, timeline 0.18 s, asof 0.18 s, diff 0.17 s; 6 MOCK flags now false; vite.config.js proxies /api to :8002; contract edits: top-2 gap <0.02, asof date 2026-10-01 |
 - 007-fetch-images | done | article_image 15,355 rows (en 3,425 / fi 8,723 / sv 3,207 = 52.1% of 29,460; orchestrator recount), Commons-only, utm stripped, thumb.wikimedia.org + upload.wikimedia.org; 28 min; resume = 0 requests; /api/article/fi/1256 now returns real thumb_url. TODO: expose license/artist in API + UI credit; User-Agent contact is still a placeholder |
-- 008-chunks | partial | chunk 83,797 rows (fi 51,541 / sv 11,810 / en 20,446; 19,469 reused article vectors); chunk_vector 21,497 (small batch 2,028 embedded on Mac, digest 790764642607); still to embed: fi 37,323 / sv 8,166 / en 16,811 (~1.8 chunks/s on M2 => fi ~5.8 h, all ~9.6 h), user runs scripts/EMBED_ON_MAC.md. Partial eval hit@5 76%->95%, hit@10 86%->97% is BIASED (only the answer pages got chunk vectors); the headline number needs the full run |
+- 008-chunks | partial (full embed running on Verda GPU, see CHECKPOINT) | chunk 83,797 rows (fi 51,541 / sv 11,810 / en 20,446; 19,469 reused article vectors); chunk_vector 21,497 (small batch 2,028 embedded on Mac, digest 790764642607); still to embed: fi 37,323 / sv 8,166 / en 16,811 (~1.8 chunks/s on M2 => fi ~5.8 h, all ~9.6 h), user runs scripts/EMBED_ON_MAC.md. Partial eval hit@5 76%->95%, hit@10 86%->97% is BIASED (only the answer pages got chunk vectors); the headline number needs the full run |
 - 009-api-summary | done | /api/summary real (MOCK.summary=false); claude-haiku-5-5, facts carry verbatim source sentence (92/92 grounded on fi 1256/1150/440); summary_cache pre-warmed; cache hit ~3-7 ms, miss = extractive + background LLM; Talvisota: 14 sections, 5 ghost sections; contract REAL=summary 11/11, mock 11/11 (orchestrator rerun); Playwright `artifacts/screenshots/009-api-summary/` |
 - 010-api-ask | done | /api/ask real (MOCK.ask=false); hero 'How did the Winter War end?' -> top fi 1256 via en/sv->fi sibling, history_available, 5 milestones (signing date drifts '13 March' -> 'evening of 12 March, in effect 13 March'); cache hit 4 ms on VPS; 25/25 pytest, contract REAL=ask 11/11; answer_cache pre-warm of data/demo-questions.tsv (40) continues in tmux answers. Follow-ups: diff rejects 4-digit rev_id (oldid=6110 -> 404, _REV_ID_RE in main.py); re-run build_answers after full chunk embed |
+- 012-ask-milestones | spec ready (fix: count only Finnish source-sentence changes, changed_by = real introducing rev; hero test pins rev 1862876) |
+- 013-i18n | spec being written at handoff (UI spec: Argon first; after 012) |
 - 011-wayb-spike | spec ready (gate: 010 done; half a day; findings -> docs/memory/research/wayb-spike.md) |
 
 ## Backlog (proposed specs, in order)
