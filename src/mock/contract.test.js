@@ -522,6 +522,17 @@ test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suom
       }
     }
 
+    for (const road of [talviTopic, sisallisTopic]) {
+      for (const ev of road.events) {
+        for (const lg of ev.lanes) {
+          const sib = ev.siblings[lg];
+          const lead = String(sib?.summary_short || "");
+          assert.ok(lead && !lead.includes("[mock]") && !lead.startsWith("#"), `sibling lead ${ev.title} ${lg}`);
+          if (lg === ev.lang) assert.equal(sib.summary_short, ev.summary_short);
+        }
+      }
+    }
+
     const talviKeys = new Set(talviTopic.events.map((ev) => `${ev.lang}:${ev.page_id}`));
     const sisallisKeys = new Set(sisallisTopic.events.map((ev) => `${ev.lang}:${ev.page_id}`));
     assert.notDeepEqual([...talviKeys].sort(), [...sisallisKeys].sort());

@@ -146,3 +146,33 @@ def test_build_road_events_seed_once_no_dup_wikidata_and_why_fields():
 
     cat_events = road.build_road_events(ordered, category="Suomen suuriruhtinaskunta")
     assert all(ev["why"] == {"kind": "category", "similarity": None, "category": "Suomen suuriruhtinaskunta"} for ev in cat_events)
+
+
+class _FakeCur:
+    def __init__(self, rows):
+        self.rows, self.calls = rows, []
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_attach_sibling_leads_one_query_own_lang_copied():
+    items = [
+        {
+            "lang": "fi", "summary_short": "FI short", "summary_long": "FI long",
+            "siblings": {"fi": {"page_id": 1}, "sv": None, "en": {"page_id": 9}},
+        },
+        {"lang": "fi", "summary_short": "x", "summary_long": "y",
+         "siblings": {"fi": {"page_id": 2}, "sv": None, "en": None}},
+    ]
+    cur = _FakeCur([("en", 9, "# Independence\n\nFinland declared independence.\n## History")])
+    road._attach_sibling_leads(cur, items)
+    assert len(cur.calls) == 1 and cur.calls[0][1] == ("en", 9)
+    s = items[0]["siblings"]
+    assert (s["fi"]["summary_short"], s["fi"]["summary_long"]) == ("FI short", "FI long")
+    assert s["en"]["summary_short"] == "Finland declared independence."
+    assert s["sv"] is None and items[1]["siblings"]["en"] is None
+    assert items[1]["siblings"]["fi"]["summary_short"] == "x"

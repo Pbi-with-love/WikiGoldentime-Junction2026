@@ -170,6 +170,10 @@ export async function getRoad(langOrOpts = "fi", pageIdArg = null) {
 
 /**
  * GET /api/topic-road?category=... or ?lang=...&page_id=... (Option A: Historical Topic Road)
+ * Response `{topic, eras, events}`; each event has `lang, page_id, title, url, event_year, lanes, summary_short,
+ * summary_long, ...` for the station language and
+ * `siblings[lg] = {page_id, title, url, summary_short, summary_long} | null` for lg in fi|sv|en. A sibling lead
+ * is that language's native article lead (<= 240 / <= 600 chars); the station's own sibling equals the event lead.
  */
 export async function getTopicRoad({
   lang = "fi",
