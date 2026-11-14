@@ -79,7 +79,9 @@ Start in the **English** UI (`English`, top right). Times in brackets are speaki
   if there is time, and do not click while it runs.
 - Language question from judges: click **Svenska**, the chip question shows "Baserat på Wikipedia
   (engelska, svenska, finska)" and "Detta svar ändrades 4 gånger" (2003–2004, 2005, 2006–2008,
-  2009–2025, 2026; the en and fi answers say 3 times); in Finnish ask `Miten talvisota päättyi?`
+  2009–2025, 2026; the en and fi answers say 3 times: the sv question retrieves other lead sentences, and the
+  cited ones gain new numbers at Peltimikko's 6 Dec 2009 edit ("105 päivää") and at Jesper Vire's 9 Sep 2026
+  lead rewrite, which is real article history, not a bug); in Finnish ask `Miten talvisota päättyi?`
   ("Perustuu Wikipedia-artikkeleihin (suomi)", 2006–2010 "Muokannut Whiskey~fiwiki (7.11.2006)").
 
 Do not use demo questions 32, 34 or 39 from `data/demo-questions.tsv` (1-based). Their top article is

@@ -1,0 +1,22 @@
+Spec 033 bug 3: sv hero says "changed 4 times" (5 periods), en/fi say 3. Verdict: REAL by the milestone rule. No code change, no rebuild.
+Sources: artifacts/033/answer_cache_backup/{en,fi,sv}_default.json (the three default answer_cache rows, backed up). Scripts bug3_*.py run on the VPS.
+Rule (ask.build_milestones): a milestone needs the cited source-sentence set to change, with digit tokens not in the previously cited sentences (material_tokens), confirmed by scan_change_window (the new sentences first hold at a real edit).
+
+| lang | period | changed_by (user, oldid) | cited sentence(s) that carry the new numbers | verdict |
+| en | 2003-2004 | first snapshot | - | - |
+| en | 2005 | Kahkonen 590107 | "...menetti 10 prosenttia alueistaan..." (10) | real |
+| en | 2006-2020 | Whiskey~fiwiki 1862876 | 12. maaliskuuta vs 13. | real (kept) |
+| en | 2021-2026 | Tridon1971 20199251 | lead sentence with "(31.12.1939 ... 315 727 ...)" | real by rule |
+| fi | 2005 | Kahkonen 590107 | same 10 % sentence | real |
+| fi | 2006-2010 | Whiskey~fiwiki 1862876 | 12. maaliskuuta | real (kept) |
+| fi | 2011-2026 | KLS 10983505 | reworded sentences | real by rule |
+| sv | 2005 | Kahkonen 590107 | same 10 % sentence | real |
+| sv | 2006-2008 | Whiskey~fiwiki 1862876 | 12. maaliskuuta | real (kept) |
+| sv | 2009-2025 | Peltimikko 7690165 (6 Dec 2009, "introa muokattu") | "Talvisota alkoi ... päättyi 105 päivää myöhemmin ..." | REAL: "105" appears in the article for the first time at this revision (absent in rev 7690090 before it) |
+| sv | 2026 | Jesper Vire 24228934 (9 Sep 2026, "Johdantoa vielä selkeämmäksi") | lead sentence "Rauhansopimuksessa Suomi luovutti ... (31.12.1939 Helsingin asukasluku oli 315&nbsp;727, ...)" + 12.3.1940 + "30 vuodeksi" | REAL by rule; weakest of the five: the sentence is missing in rev 24227313 and present in 24228934 (lead rewrite), but its population figures were already in the article lead before |
+The sv "2006-2008" end year is just the start of the 2009 milestone, not a separate change.
+Why sv differs: the sv question retrieves other lead sentences, so different sentences are cited at each snapshot; en/fi cite sentences that were only reworded in 2009 and 2026.
+
+Could it be fixed as an artifact? Tried the only candidate rule (a new cited sentence counts only if its digits are absent from the article text just before the origin edit): it removes sv 2026, but it also removes en 2006 (1862876) and 2021 and fi 2006 (1862876) and 2011 (bug3_rulecheck.py output). The spec forbids changing en/fi hero milestones, so no code change.
+Note for the orchestrator: the 2026 sv milestone could be dropped by hand only with a deliberate decision to change the rule for all languages.
+DEMO.md: "Language question from judges" bullet extended with one sentence of the reason.
