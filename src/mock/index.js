@@ -505,7 +505,20 @@ export async function mockGetDiff(pageId, from = "2006", to = "2026") {
 }
 
 // 8. GET /api/ask?q=
-export async function mockAsk(q = "") {
+function withMockAskUi(payload, ui) {
+  const out = structuredClone(payload);
+  const normalizedUi = ui ? String(ui) : null;
+  out.out_lang = normalizedUi;
+  if (normalizedUi) {
+    const rawAns = String(out.answer || "");
+    out.answer = rawAns.startsWith("[mock] ")
+      ? `[mock] (${normalizedUi}) ${rawAns.slice(7)}`
+      : `[mock] (${normalizedUi}) ${rawAns}`;
+  }
+  return out;
+}
+
+export async function mockAsk(q = "", ui = null) {
   await simulateNetwork();
   const raw = String(q || "").trim();
   const lower = raw.toLowerCase();
@@ -513,45 +526,53 @@ export async function mockAsk(q = "") {
   // Demo Path A: Winter War end (English, Vietnamese, Finnish, Swedish)
   if (
     lower.includes("winter war") ||
+    lower.includes("hur slutade vinterkriget") ||
+    lower.includes("miten talvisota päättyi") ||
     lower.includes("mùa đông") ||
     lower.includes("mua dong") ||
     lower.includes("moskovan rauha") ||
     lower.includes("moscow peace") ||
     (lower.includes("talvisota") && (lower.includes("end") || lower.includes("päätty") || lower.includes("rauha")))
   ) {
-    return structuredClone(WINTER_WAR_END_ASK_FIXTURE);
+    return withMockAskUi(WINTER_WAR_END_ASK_FIXTURE, ui);
   }
 
   // Explicit no-history test query (so history_available=false is easily testable)
   if (lower.includes("vinterkriget") || lower.includes("nohistory")) {
-    return {
-      answer:
-        "[mock] Vinterkriget (1939–1940) utkämpades mellan Finland och Sovjetunionen [1]. Eftersom denna källa är svenskspråkig finns ingen systemversionerad redigeringshistorik i Dataset M.",
-      sources: [
-        {
-          n: 1,
-          lang: "sv",
-          page_id: 23612,
-          title: "Vinterkriget",
-          url: makeWikiUrl("sv", "Vinterkriget"),
-        },
-      ],
-      top: { lang: "sv", page_id: 23612 },
-      history_available: false,
-      milestones: [],
-    };
+    return withMockAskUi(
+      {
+        answer:
+          "[mock] Vinterkriget (1939–1940) utkämpades mellan Finland och Sovjetunionen [1]. Eftersom denna källa är svenskspråkig finns ingen systemversionerad redigeringshistorik i Dataset M.",
+        sources: [
+          {
+            n: 1,
+            lang: "sv",
+            page_id: 23612,
+            title: "Vinterkriget",
+            url: makeWikiUrl("sv", "Vinterkriget"),
+          },
+        ],
+        top: { lang: "sv", page_id: 23612 },
+        history_available: false,
+        milestones: [],
+      },
+      ui
+    );
   }
 
   // Otherwise match top articles via search
   const searchRes = await mockSearch({ q: raw || "Talvisota", limit: 3 });
   if (searchRes.rows.length === 0) {
-    return {
-      answer: "[mock] No grounded Wikipedia articles matched your question.",
-      sources: [],
-      top: { lang: "fi", page_id: 1256 },
-      history_available: false,
-      milestones: [],
-    };
+    return withMockAskUi(
+      {
+        answer: "[mock] No grounded Wikipedia articles matched your question.",
+        sources: [],
+        top: { lang: "fi", page_id: 1256 },
+        history_available: false,
+        milestones: [],
+      },
+      ui
+    );
   }
 
   const { byKey } = getStarsDataset();
@@ -567,51 +588,57 @@ export async function mockAsk(q = "") {
 
   const hasHistory = Boolean(topStar?.has_history);
   if (!hasHistory) {
-    return {
-      answer: `[mock] According to ${topRow.title} [1], this topic is part of the Finnish history collection on Wikipedia. Edit history milestones are only available for Finnish articles loaded in Dataset M.`,
-      sources,
-      top: { lang: topRow.lang, page_id: topRow.page_id },
-      history_available: false,
-      milestones: [],
-    };
+    return withMockAskUi(
+      {
+        answer: `[mock] According to ${topRow.title} [1], this topic is part of the Finnish history collection on Wikipedia. Edit history milestones are only available for Finnish articles loaded in Dataset M.`,
+        sources,
+        top: { lang: topRow.lang, page_id: topRow.page_id },
+        history_available: false,
+        milestones: [],
+      },
+      ui
+    );
   }
 
   const earlySnap = getAsOfSnapshotSync(topStar, "2006-10-01 00:00:00");
   const midSnap = getAsOfSnapshotSync(topStar, "2012-10-01 00:00:00");
   const nowSnap = getAsOfSnapshotSync(topStar, "2026-10-01 00:00:00");
 
-  return {
-    answer: `[mock] Grounded in **${topStar.title}** [1], the article documents key events in ${topStar.category || "Finnish history"} and has evolved across three major editorial phases since ${topStar.first_edit_year} [1]${sources.length > 1 ? " [2]" : ""}.`,
-    sources,
-    top: { lang: topStar.lang, page_id: topStar.page_id },
-    history_available: true,
-    milestones: [
-      {
-        from_year: topStar.first_edit_year || 2004,
-        to_year: 2008,
-        answer: earlySnap.blocks[1]?.[1] || earlySnap.blocks[0][1],
-        rev_id: earlySnap.rev_id,
-        user: earlySnap.user,
-        comment: earlySnap.comment,
-      },
-      {
-        from_year: 2009,
-        to_year: 2016,
-        answer: midSnap.blocks[1]?.[1] || midSnap.blocks[0][1],
-        rev_id: midSnap.rev_id,
-        user: midSnap.user,
-        comment: midSnap.comment,
-      },
-      {
-        from_year: 2017,
-        to_year: 2026,
-        answer: nowSnap.blocks[1]?.[1] || nowSnap.blocks[0][1],
-        rev_id: nowSnap.rev_id,
-        user: nowSnap.user,
-        comment: nowSnap.comment,
-      },
-    ],
-  };
+  return withMockAskUi(
+    {
+      answer: `[mock] Grounded in **${topStar.title}** [1], the article documents key events in ${topStar.category || "Finnish history"} and has evolved across three major editorial phases since ${topStar.first_edit_year} [1]${sources.length > 1 ? " [2]" : ""}.`,
+      sources,
+      top: { lang: topStar.lang, page_id: topStar.page_id },
+      history_available: true,
+      milestones: [
+        {
+          from_year: topStar.first_edit_year || 2004,
+          to_year: 2008,
+          answer: earlySnap.blocks[1]?.[1] || earlySnap.blocks[0][1],
+          rev_id: earlySnap.rev_id,
+          user: earlySnap.user,
+          comment: earlySnap.comment,
+        },
+        {
+          from_year: 2009,
+          to_year: 2016,
+          answer: midSnap.blocks[1]?.[1] || midSnap.blocks[0][1],
+          rev_id: midSnap.rev_id,
+          user: midSnap.user,
+          comment: midSnap.comment,
+        },
+        {
+          from_year: 2017,
+          to_year: 2026,
+          answer: nowSnap.blocks[1]?.[1] || nowSnap.blocks[0][1],
+          rev_id: nowSnap.rev_id,
+          user: nowSnap.user,
+          comment: nowSnap.comment,
+        },
+      ],
+    },
+    ui
+  );
 }
 
 // 9. GET /api/threads/{lang}/{page_id}?exclude=<ids>
@@ -769,7 +796,7 @@ export async function mockGetTopicRoad({
 }
 
 // 12. GET /api/summary/{lang}/{page_id}
-export async function mockGetSummary(lang = "fi", pageId = 1256) {
+export async function mockGetSummary(lang = "fi", pageId = 1256, ui = null) {
   await simulateNetwork();
 
   const pid = pageId !== null && pageId !== undefined && pageId !== "" ? Number(pageId) : 1256;
@@ -784,5 +811,15 @@ export async function mockGetSummary(lang = "fi", pageId = 1256) {
         (s) => !(s.lang === star.lang && s.page_id === star.page_id)
       )
     : [];
-  return buildSummaryForStar(star, rawSiblings);
+  const res = buildSummaryForStar(star, rawSiblings);
+  const outLang = ui || star.lang;
+  res.out_lang = outLang;
+  if (ui && ui !== star.lang) {
+    const stripMock = (txt) => String(txt || "").replace(/^\[mock\]\s*/, "");
+    res.tldr = `[mock] (${ui}) ${stripMock(res.tldr)}`;
+    for (const sec of res.sections || []) {
+      sec.one_line = `[mock] (${ui}) ${stripMock(sec.one_line)}`;
+    }
+  }
+  return res;
 }

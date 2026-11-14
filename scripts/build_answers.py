@@ -31,12 +31,30 @@ def _load_questions(tsv_path: Path) -> list[dict[str, str]]:
     return [r for r in rows if r["q"]]
 
 
-def _process_one(idx: int, total: int, row: dict[str, str], force: bool) -> dict[str, Any]:
+def _parse_ui_langs(raw_ui: list[str] | None) -> list[str | None]:
+    if not raw_ui:
+        return [None]
+    langs: list[str | None] = []
+    valid = set(ask.summary.VALID_LANGS)
+    for chunk in raw_ui:
+        for part in chunk.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if token not in valid:
+                raise ValueError(f"Invalid --ui language {token!r}; expected fi, sv, or en")
+            if token not in langs:
+                langs.append(token)
+    return langs or [None]
+
+
+def _process_one(idx: int, total: int, row: dict[str, str], force: bool, ui: str | None = None) -> dict[str, Any]:
     q = row["q"]
     origin = row["origin"]
     expected_pid = row["expected_page_id"]
+    ui_tag = ui or "-"
     try:
-        payload, stats = ask.build_and_cache_ask(q=q, force=force)
+        payload, stats = ask.build_and_cache_ask(q=q, force=force, ui=ui)
         top = payload["top"]
         ms_count = len(payload["milestones"])
         hist_avail = bool(payload["history_available"])
@@ -51,6 +69,7 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool) -> dict
         return {
             "idx": idx,
             "total": total,
+            "ui": ui_tag,
             "q": q,
             "origin": origin,
             "expected_pid": expected_pid,
@@ -81,6 +100,7 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool) -> dict
         return {
             "idx": idx,
             "total": total,
+            "ui": ui_tag,
             "q": q,
             "origin": origin,
             "expected_pid": expected_pid,
@@ -117,6 +137,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to TSV file with columns: q<TAB>expected_page_id<TAB>origin",
     )
     parser.add_argument(
+        "--ui",
+        nargs="+",
+        default=None,
+        help="Optional output UI languages (fi, sv, en; space or comma separated)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Rebuild and overwrite existing cached entries",
@@ -137,21 +163,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No questions found in {tsv_path}", file=sys.stderr)
         return 1
 
+    ui_langs = _parse_ui_langs(args.ui)
+    jobs = [(row, ui_lang) for row in questions for ui_lang in ui_langs]
+
     ask.ensure_answer_cache_table()
     t_all = time.perf_counter()
     results: list[dict[str, Any]] = []
     workers = max(1, int(args.workers))
 
     if workers == 1:
-        for idx, row in enumerate(questions, start=1):
-            res = _process_one(idx, len(questions), row, args.force)
+        for idx, (row, ui_lang) in enumerate(jobs, start=1):
+            res = _process_one(idx, len(jobs), row, args.force, ui=ui_lang)
             results.append(res)
             _print_row(res)
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {
-                pool.submit(_process_one, idx, len(questions), row, args.force): idx
-                for idx, row in enumerate(questions, start=1)
+                pool.submit(_process_one, idx, len(jobs), row, args.force, ui_lang): idx
+                for idx, (row, ui_lang) in enumerate(jobs, start=1)
             }
             for fut in as_completed(futs):
                 res = fut.result()
@@ -176,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
     for bad in not_ok:
-        print(f"  ISSUE [{bad['idx']}] {bad['q']!r}: {bad['note']} err={bad['error']}", flush=True)
+        print(f"  ISSUE [{bad['idx']}] ui={bad['ui']} {bad['q']!r}: {bad['note']} err={bad['error']}", flush=True)
 
     return 1 if errors > 0 or len(not_ok) > 0 else 0
 
@@ -184,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
 def _print_row(r: dict[str, Any]) -> None:
     src_tag = "CACHE" if r["cached_hit"] else "BUILD"
     print(
-        f"[{r['idx']}/{r['total']}] {src_tag} origin={r['origin']} top={r['top']} "
+        f"[{r['idx']}/{r['total']}] {src_tag} ui={r['ui']} origin={r['origin']} top={r['top']} "
         f"(exp={r['expected_pid']} match={r['match_exp']}) res={r['resolution']} sql={r['sql_mode']} "
         f"ms={r['milestones']} hist_calls={r['hist_calls']}/{r['max_calls']} "
         f"win={r['windows_scanned']} ver={r['versions_read']} sha={r['sha1_cleaned']} "

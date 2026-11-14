@@ -40,6 +40,7 @@
                 type="search"
                 class="search-input"
                 placeholder="Ask about the history of Finland…"
+                data-i18n-placeholder="search.placeholder"
                 autocomplete="off"
               />
               <button
@@ -47,43 +48,51 @@
                 type="button"
                 class="search-clear-btn"
                 aria-label="Clear search"
+                data-i18n="nav.clear"
                 hidden
               >
                 Clear
               </button>
             </div>
-            <button id="btn-ask" type="button" class="btn-control">Ask</button>
-            <button id="btn-search" type="submit" class="btn-control">Search</button>
+            <button id="btn-ask" type="button" class="btn-control" data-i18n="ask.submit">Ask</button>
+            <button id="btn-search" type="submit" class="btn-control" data-i18n="search.submit">Search</button>
           </form>
 
           <!-- Three Lenses switcher: Meaning (UMAP) / History (Spiral) / Geography (Finland Map) -->
           <div id="lens-switcher" class="lens-switcher" role="group" aria-label="Galaxy layout lens">
-            <button type="button" class="lens-btn is-active" data-lens="meaning" aria-pressed="true">
+            <button type="button" class="lens-btn is-active" data-lens="meaning" aria-pressed="true" data-i18n="lens.meaning">
               Meaning
             </button>
-            <button type="button" class="lens-btn" data-lens="history" aria-pressed="false">
+            <button type="button" class="lens-btn" data-lens="history" aria-pressed="false" data-i18n="lens.history">
               History
             </button>
-            <button type="button" class="lens-btn" data-lens="geography" aria-pressed="false">
+            <button type="button" class="lens-btn" data-lens="geography" aria-pressed="false" data-i18n="lens.geography">
               Geography
             </button>
           </div>
 
-          <span id="status-loading" class="status-pill" role="status" hidden>Loading…</span>
+          <span id="status-loading" class="status-pill" role="status" data-i18n="status.loading" hidden>Loading…</span>
         </div>
 
         <!-- Rehearsable prompts for the 3 demo paths + Talvitie winter road -->
         <div class="demo-prompts" aria-label="Example queries">
-          <button type="button" class="prompt-chip" data-action="ask" data-query="How did the Winter War end">
+          <button
+            type="button"
+            class="prompt-chip"
+            data-action="ask"
+            data-query="How did the Winter War end?"
+            data-i18n="demo.chipLabel"
+            data-i18n-query="demo.askQuery"
+          >
             How did the Winter War end?
           </button>
-          <button type="button" class="prompt-chip" data-action="article" data-lang="fi" data-page-id="1256">
+          <button type="button" class="prompt-chip" data-action="article" data-lang="fi" data-page-id="1256" data-i18n="demo.talvisotaSvt">
             Talvisota (SVT history)
           </button>
-          <button type="button" class="prompt-chip" data-action="threads" data-lang="fi" data-page-id="52097">
+          <button type="button" class="prompt-chip" data-action="threads" data-lang="fi" data-page-id="52097" data-i18n="demo.moscowThreads">
             Moskovan rauhansopimus (5-hop threads)
           </button>
-          <button type="button" class="prompt-chip" data-action="road" data-lang="fi" data-page-id="1256">
+          <button type="button" class="prompt-chip" data-action="road" data-lang="fi" data-page-id="1256" data-i18n="demo.talvitieTalvisota">
             Talvitie: Talvisota
           </button>
         </div>
@@ -101,14 +110,20 @@
         <section id="constellation-bar" class="constellation-bar" aria-label="Memory constellation path" hidden></section>
       </header>
 
+      <div id="lang-switcher" class="lang-switcher" role="group" aria-label="UI language">
+        <button type="button" class="lang-switch-btn" data-ui-lang="fi" lang="fi">Suomi</button>
+        <button type="button" class="lang-switch-btn" data-ui-lang="sv" lang="sv">Svenska</button>
+        <button type="button" class="lang-switch-btn" data-ui-lang="en" lang="en">English</button>
+      </div>
+
       <!-- 1B. Talvitie ("Winter Road") Top-left bar -->
       <header id="road-top-bar" class="road-top-bar" aria-label="Talvitie winter road controls" hidden>
         <div class="road-top-row">
-          <button id="btn-back-to-sky" type="button" class="btn-control btn-back-to-sky">
+          <button id="btn-back-to-sky" type="button" class="btn-control btn-back-to-sky" data-i18n="nav.backToSky">
             Back to the sky
           </button>
           <div class="road-topic-heading">
-            <span class="road-mode-tag">Talvitie</span>
+            <span class="road-mode-tag" data-i18n="demo.winterRoad">Talvitie</span>
             <h1 id="road-topic-title" class="road-topic-title">Talvisota</h1>
             <span id="road-topic-meta" class="road-topic-meta">10 historical milestones</span>
           </div>
@@ -132,15 +147,15 @@
       <!-- Single-article 3D Summary Trail HUD -->
       <header id="summary-top-bar" class="summary-top-bar" aria-label="Summary Trail navigation" hidden>
         <div class="summary-top-row">
-          <button id="summary-back-btn" type="button" class="btn-control btn-back-to-sky">
+          <button id="summary-back-btn" type="button" class="btn-control btn-back-to-sky" data-i18n="nav.backToSky">
             Back to the sky
           </button>
           <div class="summary-heading-group">
-            <span class="road-mode-tag">Summary Trail</span>
+            <span class="road-mode-tag" data-i18n="summary.modeTag">Summary Trail</span>
             <h1 id="summary-trail-title" class="road-topic-title"></h1>
             <span id="summary-trail-meta" class="road-topic-meta"></span>
           </div>
-          <button id="summary-open-article-btn" type="button" class="btn-control summary-open-article-btn">
+          <button id="summary-open-article-btn" type="button" class="btn-control summary-open-article-btn" data-i18n="nav.openFullArticle">
             Open full article
           </button>
         </div>
@@ -149,9 +164,9 @@
       <div id="summary-focused-overlay" class="summary-focused-overlay" hidden></div>
 
       <footer id="summary-bottom-bar" class="summary-bottom-bar" aria-label="Summary Trail controls" hidden>
-        <button id="summary-prev-btn" type="button" class="btn-control summary-nav-btn">Previous</button>
-        <span id="summary-progress-text" class="summary-progress-text">Overview</span>
-        <button id="summary-next-btn" type="button" class="btn-control summary-nav-btn">Next</button>
+        <button id="summary-prev-btn" type="button" class="btn-control summary-nav-btn" data-i18n="nav.prev">Previous</button>
+        <span id="summary-progress-text" class="summary-progress-text" data-i18n="panel.overview">Overview</span>
+        <button id="summary-next-btn" type="button" class="btn-control summary-nav-btn" data-i18n="nav.next">Next</button>
       </footer>
 
       <!-- 2. Right: article panel, closed by default -->
@@ -166,17 +181,18 @@
         <div class="panel-header">
           <h2 id="panel-title" class="panel-title"></h2>
           <div class="panel-header-actions">
-            <button id="panel-summarize-btn" type="button" class="btn-control btn-primary panel-summarize-btn">
+            <button id="panel-summarize-btn" type="button" class="btn-control btn-primary panel-summarize-btn" data-i18n="panel.summarize">
               Summarize
             </button>
-            <button id="panel-road-btn" type="button" class="btn-control panel-road-btn">
+            <button id="panel-road-btn" type="button" class="btn-control panel-road-btn" data-i18n="panel.seeAsRoad">
               See as a road
             </button>
-            <button id="panel-close-btn" type="button" class="btn-control panel-close-btn">Close</button>
+            <button id="panel-close-btn" type="button" class="btn-control panel-close-btn" data-i18n="nav.close">Close</button>
           </div>
         </div>
 
         <div id="panel-languages" class="panel-languages" aria-label="Language versions"></div>
+        <button type="button" id="panel-sibling-offer" class="panel-sibling-offer" hidden></button>
 
         <div id="panel-tabs" class="panel-tabs" role="tablist" aria-label="Article views">
           <button
@@ -185,6 +201,7 @@
             role="tab"
             aria-selected="true"
             class="panel-tab-btn is-active"
+            data-i18n="panel.today"
           >
             Today
           </button>
@@ -194,12 +211,13 @@
             role="tab"
             aria-selected="false"
             class="panel-tab-btn"
+            data-i18n="panel.throughTime"
           >
             Through time
           </button>
         </div>
 
-        <p id="panel-no-history" class="panel-no-history" hidden>
+        <p id="panel-no-history" class="panel-no-history" data-i18n="ask.noHistory" hidden>
           No edit history for this article yet.
         </p>
 
@@ -227,16 +245,17 @@
             href="https://fi.wikipedia.org"
             target="_blank"
             rel="noopener noreferrer"
+            data-i18n="panel.readOnWikipedia"
           >Read on Wikipedia</a>
         </div>
       </aside>
 
       <!-- 4. Small legend bottom-left: three language dots + Edit war dot. Nothing else. -->
       <aside id="sky-legend" class="legend" aria-label="Star color legend">
-        <span class="legend-item"><span class="dot dot-fi"></span>Finnish</span>
-        <span class="legend-item"><span class="dot dot-sv"></span>Swedish</span>
-        <span class="legend-item"><span class="dot dot-en"></span>English</span>
-        <span class="legend-item"><span class="dot dot-war"></span>Edit war</span>
+        <span class="legend-item"><span class="dot dot-fi"></span><span data-i18n="legend.fi">Finnish</span></span>
+        <span class="legend-item"><span class="dot dot-sv"></span><span data-i18n="legend.sv">Swedish</span></span>
+        <span class="legend-item"><span class="dot dot-en"></span><span data-i18n="legend.en">English</span></span>
+        <span class="legend-item"><span class="dot dot-war"></span><span data-i18n="legend.dispute">Edit war</span></span>
       </aside>
 
       <!-- 3A. Bottom (Sky mode): THE signature element, the Wikipedia edit-history time slider -->

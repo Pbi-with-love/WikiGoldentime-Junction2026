@@ -1,3 +1,5 @@
+import { fmtNumber, t } from "./i18n.js";
+
 const MIN_YEAR = 2003;
 const MAX_YEAR = 2026;
 const YEAR_SPAN = MAX_YEAR - MIN_YEAR; // 23 years
@@ -41,7 +43,7 @@ export function createTimeSlider({
 
   container.innerHTML = `
     <div class="slider-meta-row">
-      <span class="slider-caption">Edits per month</span>
+      <span class="slider-caption">${t("timeslider.caption")}</span>
       <span class="slider-year-summary" id="slider-year-summary" aria-live="polite"></span>
     </div>
     <div class="slider-interactive-zone" id="slider-interactive-zone">
@@ -149,11 +151,13 @@ export function createTimeSlider({
     }
 
     const stats = statsByYear.get(yearInt) || { edits: 0, warMonths: 0, historyArticles: 0 };
-    const editsFormatted = stats.edits.toLocaleString("en-US");
+    const editsFormatted = fmtNumber(stats.edits);
+    const editsLine = t("timeslider.editsInYear", { edits: editsFormatted, year: yearInt });
     if (stats.warMonths > 0) {
-      yearSummaryEl.innerHTML = `<span>${editsFormatted} edits in ${yearInt}</span> <span class="summary-war-indicator"><span class="war-inline-dot"></span>${stats.warMonths} edit-war ${stats.warMonths === 1 ? "month" : "months"}</span>`;
+      const warText = t("timeslider.warMonths", { count: stats.warMonths });
+      yearSummaryEl.innerHTML = `<span>${editsLine}</span> <span class="summary-war-indicator"><span class="war-inline-dot"></span>${warText}</span>`;
     } else {
-      yearSummaryEl.innerHTML = `<span>${editsFormatted} edits in ${yearInt}</span>`;
+      yearSummaryEl.innerHTML = `<span>${editsLine}</span>`;
     }
   }
 

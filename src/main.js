@@ -15,6 +15,7 @@ import {
 import { createGalaxyScene } from "./scene.js";
 import { createTimeSlider } from "./timeslider.js";
 import { createUI } from "./ui.js";
+import { lang as uiLang, applyStatic, t } from "./i18n.js";
 
 const EDIT_WAR_DISPUTE_YEARS = {
   1256: [2007, 2008, 2013, 2014, 2017, 2022],
@@ -33,6 +34,7 @@ function isStarEditWar(star, yearInt) {
 }
 
 async function init() {
+  applyStatic(document);
   const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   let reducedMotion = reducedMotionQuery.matches;
 
@@ -77,7 +79,7 @@ async function init() {
         sceneCtrl?.setSearchResults(matchedStars, { glide: true });
       } catch (err) {
         ui.setLoading(false);
-        ui.showError("Couldn't reach the server. Try again.");
+        ui.showError(t("error.network"));
       }
     },
 
@@ -85,7 +87,7 @@ async function init() {
       sliderCtrl?.stopIntro();
       ui.setLoading(true);
       try {
-        const askRes = await ask(query);
+        const askRes = await ask(query, uiLang);
         const topKey = `${askRes.top.lang}:${askRes.top.page_id}`;
         const topStar = starByKey.get(topKey) || null;
         const threadsRes = await getThreads(askRes.top.lang, askRes.top.page_id);
@@ -123,7 +125,7 @@ async function init() {
         ui.renderAskResult(activeAskState);
       } catch (err) {
         ui.setLoading(false);
-        ui.showError("Couldn't reach the server. Try again.");
+        ui.showError(t("error.network"));
       }
     },
 
@@ -212,7 +214,7 @@ async function init() {
         });
       } catch (err) {
         ui.setLoading(false);
-        ui.showError("Couldn't reach the server. Try again.");
+        ui.showError(t("error.network"));
       }
     },
 
@@ -397,7 +399,7 @@ async function init() {
     } catch (err) {
       if (roadSeq !== roadLoadSeq) return;
       ui.setLoading(false);
-      ui.showError("Couldn't reach the server. Try again.");
+      ui.showError(t("error.network"));
     }
   }
 
@@ -431,7 +433,7 @@ async function init() {
     ui.setLoading(true);
 
     try {
-      const summaryData = await getSummary(lang, page_id);
+      const summaryData = await getSummary(lang, page_id, uiLang);
       if (seq !== summaryLoadSeq) return;
       ui.setLoading(false);
       ui.closeArticlePanel();
@@ -441,7 +443,7 @@ async function init() {
     } catch (err) {
       if (seq !== summaryLoadSeq) return;
       ui.setLoading(false);
-      ui.showError("Couldn't load the article summary. Try again.");
+      ui.showError(t("error.summaryLoad"));
     }
   }
 
@@ -553,7 +555,7 @@ async function init() {
     } catch (err) {
       if (articleSeq !== articleLoadSeq) return;
       ui.setLoading(false);
-      ui.showError("Couldn't reach the server. Try again.");
+      ui.showError(t("error.network"));
     }
   }
 
@@ -572,7 +574,7 @@ async function init() {
     ui.setLoading(false);
   } catch (err) {
     ui.setLoading(false);
-    ui.showError("Couldn't reach the server. Try again.");
+    ui.showError(t("error.network"));
   }
 
   const canvas = document.getElementById("galaxy-canvas");

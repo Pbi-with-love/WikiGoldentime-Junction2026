@@ -158,6 +158,12 @@ SECTION_SCHEMA: dict[str, Any] = {
     },
 }
 
+UI_LANGUAGE_NAMES = {
+    "fi": "Finnish",
+    "sv": "Swedish",
+    "en": "English",
+}
+
 SYSTEM_PROMPT = (
     "You summarize Wikipedia articles using ONLY the text provided in the user message. "
     "Do not use any outside knowledge or assumptions. "
@@ -173,14 +179,86 @@ SYSTEM_PROMPT = (
     "If no verbatim sentence supports a fact, return `[]` for `facts`."
 )
 
+
+_NATIVE_REMINDER = {
+    "fi": (
+        "TÄRKEÄ KIELIOHJE: Kirjoita `tldr`, `one_line`, `summary` sekä jokainen `facts[].label` ja "
+        "`facts[].value` täysin suomeksi (suomenna myös vieraskieliset nimet ja termit luontevasti, "
+        "äläkä kopioi lähdelauseita `value`-kenttään). Vain `facts[].source` kopioidaan sanasta sanaan alkuperäiskielellä."
+    ),
+    "sv": (
+        "VIKTIG SPRÅKINSTRUKTION: Skriv `tldr`, `one_line`, `summary` samt varje `facts[].label` och "
+        "`facts[].value` uteslutande på naturlig, idiomatisk svenska (t.ex. 'Vinterkriget', 'Fortsättningskriget', "
+        "'Finska inbördeskriget', 'Finska viken', 'Röda armén', 'krigsfångläger', 'fredsvillkoren', 'angripare' — "
+        "behåll ALDRIG finska ord, böjningsformer, oöversatta citat eller kopierade finska meningar i "
+        "`tldr`, `one_line`, `summary`, `label` eller `value`). "
+        "Endast `facts[].source` ska kopieras ordagrant på originalspråket."
+    ),
+    "en": (
+        "IMPORTANT LANGUAGE INSTRUCTION: Write `tldr`, `one_line`, `summary`, and every `facts[].label` and "
+        "`facts[].value` exclusively in natural English (translate Finnish/Swedish headings and terms, "
+        "and NEVER copy untranslated source sentences into `value`). Only `facts[].source` stays verbatim in the original language."
+    ),
+}
+
+
+def _build_translated_system_prompt(out_lang: str) -> str:
+    lang_name = UI_LANGUAGE_NAMES[out_lang]
+    native = _NATIVE_REMINDER[out_lang]
+    return (
+        "You summarize Wikipedia articles using ONLY the text provided in the user message. "
+        "Do not use any outside knowledge or assumptions. "
+        f"CRITICAL OUTPUT LANGUAGE REQUIREMENT: You MUST write `tldr`, `one_line`, `summary`, "
+        f"and every fact's `label` and `value` STRICTLY IN {lang_name} ({out_lang}). "
+        f"NEVER write or leave prose, headings, or copied source sentences in Finnish unless {lang_name} is Finnish. "
+        f"Translate all prose, concepts, war/treaty names, and headings naturally into idiomatic {lang_name}. "
+        "Output valid JSON only, matching the required schema:\n"
+        f"- For an article overview (`tldr`, `facts`): `tldr` must be 3 concise sentences in {lang_name}.\n"
+        f"- For a section (`one_line`, `summary`, `facts`): `one_line` must be 1 concise sentence in {lang_name}; "
+        f"`summary` must be 2-3 sentences in {lang_name}.\n"
+        f"- For `facts`: include up to 3 key facts explicitly stated in the provided text. "
+        f"`label` MUST be a short {lang_name} label and `value` MUST be a concise translated value (date, number, entity, or short phrase in {lang_name} — NEVER copy a raw source sentence into `value`). "
+        "Every fact's `source` MUST be a single full sentence copied character-for-character verbatim "
+        "in the original article language from the provided text (never translate, paraphrase, shorten, or write placeholders). "
+        "If no verbatim sentence supports a fact, return `[]` for `facts`.\n"
+        + native
+    )
+
+
+TRANSLATED_SYSTEM_PROMPTS = {
+    code: _build_translated_system_prompt(code) for code in VALID_LANGS
+}
+
+
+def normalize_ui(ui: str | None) -> str | None:
+    """Validate optional ?ui= query parameter; return None when absent/empty, else raise 422."""
+    if ui is None or ui == "":
+        return None
+    if ui not in VALID_LANGS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid ui language: {ui!r}. Expected fi, sv, or en.",
+        )
+    return ui
+
+
+def resolve_cache_ui(ui: str | None, article_lang: str) -> str:
+    """Return '' when ui is absent or matches article_lang, otherwise normalized ui code."""
+    ui_norm = normalize_ui(ui)
+    if not ui_norm or ui_norm == article_lang:
+        return ""
+    return ui_norm
+
+
 SUMMARY_CACHE_DDL = """
 CREATE TABLE IF NOT EXISTS wikirag.summary_cache (
     lang VARCHAR(3) NOT NULL,
     page_id INT UNSIGNED NOT NULL,
     rev_id BIGINT UNSIGNED NOT NULL,
+    ui VARCHAR(3) NOT NULL DEFAULT '',
     json LONGTEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (lang, page_id, rev_id)
+    PRIMARY KEY (lang, page_id, rev_id, ui)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
@@ -193,12 +271,12 @@ WHERE lang = ? AND page_id = ?
 CACHE_GET_SQL = """
 SELECT json
 FROM wikirag.summary_cache
-WHERE lang = ? AND page_id = ? AND rev_id = ?
+WHERE lang = ? AND page_id = ? AND rev_id = ? AND ui = ?
 """
 
 CACHE_PUT_SQL = """
-INSERT INTO wikirag.summary_cache (lang, page_id, rev_id, json)
-VALUES (?, ?, ?, ?)
+INSERT INTO wikirag.summary_cache (lang, page_id, rev_id, ui, json)
+VALUES (?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE json = VALUES(json), created_at = CURRENT_TIMESTAMP
 """
 
@@ -222,7 +300,7 @@ _table_lock = threading.Lock()
 _cache_table_ready = False
 
 _inflight_lock = threading.Lock()
-_inflight_jobs: set[tuple[str, int, int]] = set()
+_inflight_jobs: set[tuple[str, int, int, str]] = set()
 
 
 @dataclass
@@ -742,9 +820,12 @@ def build_summary_payload(
     model: str | None = None,
     max_workers: int = 4,
     precomputed_history: tuple[dict[int, dict[str, Any]], list[dict[str, Any]]] | None = None,
+    ui: str | None = None,
 ) -> tuple[dict[str, Any], BuildStats]:
     """Assemble the full /api/summary/{lang}/{page_id} response dict and build stats."""
     lang = str(article_row["lang"])
+    cache_ui = resolve_cache_ui(ui, lang)
+    active_system_prompt = TRANSLATED_SYSTEM_PROMPTS[cache_ui] if cache_ui else SYSTEM_PROMPT
     page_id = int(article_row["page_id"])
     rev_id = int(article_row["rev_id"])
     text = str(article_row["text"])
@@ -816,10 +897,29 @@ def build_summary_payload(
             if kept_sections and not is_short
             else ""
         )
-        article_prompt = f"Title: {article_row['title']}\n\n{article_source_text}{headings_line}"
+        base_article_prompt = f"Title: {article_row['title']}\n\n{article_source_text}{headings_line}"
+        if cache_ui:
+            out_name = UI_LANGUAGE_NAMES[cache_ui]
+            src_name = UI_LANGUAGE_NAMES.get(lang, lang)
+            article_prompt = (
+                f"Target output language: {out_name} ({cache_ui}). Source text language: {src_name}.\n\n"
+                f"<article_text lang=\"{lang}\">\n{base_article_prompt}\n</article_text>\n\n"
+                f"CRITICAL REMINDER: Write `tldr` (3 sentences) and every `facts[].label` and concise `facts[].value` "
+                f"STRICTLY IN {out_name} (NOT in {src_name}; never copy {src_name} sentences into `facts[].value`). "
+                f"Only `facts[].source` stays verbatim in {src_name} copied character-for-character from <article_text>.\n"
+                f"{_NATIVE_REMINDER[cache_ui]}"
+            )
+        else:
+            article_prompt = base_article_prompt
 
         def summarize_article() -> tuple[str, list[dict[str, str]], int, int, int, int, bool]:
-            parsed, in_t, out_t = _call_llm_json(client, resolved_model, ARTICLE_SCHEMA, article_prompt)
+            parsed, in_t, out_t = _call_llm_json(
+                client,
+                resolved_model,
+                ARTICLE_SCHEMA,
+                article_prompt,
+                system_prompt=active_system_prompt,
+            )
             if parsed is None or not str(parsed.get("tldr", "")).strip():
                 return fallback_tldr, [], 0, 0, in_t, out_t, True
             facts_kept, kept_n, dropped_n = filter_grounded_facts(
@@ -831,7 +931,27 @@ def build_summary_payload(
         def summarize_section(
             sec_item: dict[str, Any],
         ) -> tuple[str, str, list[dict[str, str]], int, int, int, int, bool]:
-            parsed, in_t, out_t = _call_llm_json(client, resolved_model, SECTION_SCHEMA, sec_item["text"])
+            if cache_ui:
+                out_name = UI_LANGUAGE_NAMES[cache_ui]
+                src_name = UI_LANGUAGE_NAMES.get(lang, lang)
+                sec_user_msg = (
+                    f"Target output language: {out_name} ({cache_ui}). Source text language: {src_name}.\n\n"
+                    f"<section_text lang=\"{lang}\">\n{sec_item['text']}\n</section_text>\n\n"
+                    f"CRITICAL REMINDER: Write `one_line` (1 sentence), `summary` (2-3 sentences), and every "
+                    f"`facts[].label` and concise `facts[].value` STRICTLY IN {out_name} (NOT in {src_name}; "
+                    f"translate {src_name} terms/headings and NEVER copy {src_name} sentences into `facts[].value`). "
+                    f"Only `facts[].source` stays verbatim in {src_name} copied character-for-character from <section_text>.\n"
+                    f"{_NATIVE_REMINDER[cache_ui]}"
+                )
+            else:
+                sec_user_msg = sec_item["text"]
+            parsed, in_t, out_t = _call_llm_json(
+                client,
+                resolved_model,
+                SECTION_SCHEMA,
+                sec_user_msg,
+                system_prompt=active_system_prompt,
+            )
             if parsed is None:
                 return sec_item["one_line"], sec_item["summary"], [], 0, 0, in_t, out_t, True
             one_line_val = str(parsed.get("one_line", "")).strip()
@@ -874,9 +994,15 @@ def build_summary_payload(
     stats.sections = len(sections_out)
     stats.ghosts = len(ghosts_out)
 
+    if use_llm and cache_ui and not (stats.total_calls > 0 and stats.failed_calls == stats.total_calls):
+        out_lang = cache_ui
+    else:
+        out_lang = lang
+
     payload = {
         "article": article_meta,
         "mode": "llm" if use_llm else "extractive",
+        "out_lang": out_lang,
         "rev_id": rev_id,
         "tldr": tldr,
         "facts": article_facts,
@@ -922,11 +1048,13 @@ def build_and_cache_llm_summary(
     force: bool = False,
     llm_client: Any = None,
     model: str | None = None,
+    ui: str | None = None,
 ) -> tuple[dict[str, Any], BuildStats, bool]:
     """Build the LLM summary synchronously and write wikirag.summary_cache.
 
     Returns (payload, stats, from_cache).
     """
+    cache_ui = resolve_cache_ui(ui, lang)
     ensure_cache_table()
     rag_con = _open_rag()
     try:
@@ -936,7 +1064,7 @@ def build_and_cache_llm_summary(
             rev_id = int(article_row["rev_id"])
 
             if not force:
-                rag_cur.execute(CACHE_GET_SQL, (lang, page_id, rev_id))
+                rag_cur.execute(CACHE_GET_SQL, (lang, page_id, rev_id, cache_ui))
                 cached = rag_cur.fetchone()
                 if cached is not None:
                     cached_payload = json.loads(cached[0])
@@ -962,6 +1090,7 @@ def build_and_cache_llm_summary(
                 use_llm=True,
                 llm_client=llm_client,
                 model=model,
+                ui=cache_ui or None,
             )
         finally:
             if svt_cur is not None:
@@ -972,11 +1101,12 @@ def build_and_cache_llm_summary(
 
     if stats.total_calls > 0 and stats.failed_calls == stats.total_calls:
         logger.error(
-            "All %d LLM calls failed for %s:%s@%s; skipping cache write",
+            "All %d LLM calls failed for %s:%s@%s ui=%s; skipping cache write",
             stats.total_calls,
             lang,
             page_id,
             article_row["rev_id"],
+            cache_ui,
         )
         return payload, stats, False
 
@@ -985,7 +1115,7 @@ def build_and_cache_llm_summary(
     try:
         cur = rag_write.cursor()
         try:
-            cur.execute(CACHE_PUT_SQL, (lang, page_id, int(article_row["rev_id"]), serialized))
+            cur.execute(CACHE_PUT_SQL, (lang, page_id, int(article_row["rev_id"]), cache_ui, serialized))
             rag_write.commit()
         finally:
             cur.close()
@@ -995,15 +1125,20 @@ def build_and_cache_llm_summary(
     return payload, stats, False
 
 
-def _background_llm_worker(key: tuple[str, int, int], llm_client: Any = None) -> None:
-    lang, page_id, rev_id = key
+def _background_llm_worker(key: tuple[str, int, int, str], llm_client: Any = None) -> None:
+    lang, page_id, rev_id, cache_ui = key
     try:
         if llm_client is None and not os.environ.get("ANTHROPIC_API_KEY"):
-            logger.warning("ANTHROPIC_API_KEY unset; skipping background summary for %s:%s", lang, page_id)
+            logger.warning(
+                "ANTHROPIC_API_KEY unset; skipping background summary for %s:%s ui=%s",
+                lang,
+                page_id,
+                cache_ui,
+            )
             return
-        build_and_cache_llm_summary(lang, page_id, llm_client=llm_client)
+        build_and_cache_llm_summary(lang, page_id, ui=cache_ui or None, llm_client=llm_client)
     except Exception:
-        logger.exception("Background LLM summary job failed for %s:%s@%s", lang, page_id, rev_id)
+        logger.exception("Background LLM summary job failed for %s:%s@%s ui=%s", lang, page_id, rev_id, cache_ui)
     finally:
         with _inflight_lock:
             _inflight_jobs.discard(key)
@@ -1020,14 +1155,17 @@ def get_summary_response(
     rag_opener: Callable[[], mariadb.Connection] | None = None,
     svt_opener: Callable[[], mariadb.Connection] | None = None,
     llm_client: Any = None,
+    ui: str | None = None,
 ) -> Response:
     """Handle GET /api/summary/{lang}/{page_id} without ever awaiting an LLM call."""
     if lang not in VALID_LANGS:
         raise HTTPException(status_code=404, detail=f"Unknown language: {lang}")
+    cache_ui = resolve_cache_ui(ui, lang)
 
     open_rag = rag_opener or _open_rag
     open_svt = svt_opener or _open_svt
 
+    default_cached_json: str | None = None
     rag_con = open_rag()
     try:
         ensure_cache_table(rag_con)
@@ -1041,42 +1179,54 @@ def get_summary_response(
             article_row = dict(zip(cols, fetched))
             rev_id = int(article_row["rev_id"])
 
-            rag_cur.execute(CACHE_GET_SQL, (lang, page_id, rev_id))
+            rag_cur.execute(CACHE_GET_SQL, (lang, page_id, rev_id, cache_ui))
             cached = rag_cur.fetchone()
             if cached is not None:
                 return Response(content=cached[0], media_type="application/json")
+
+            if cache_ui:
+                rag_cur.execute(CACHE_GET_SQL, (lang, page_id, rev_id, ""))
+                fallback_row = rag_cur.fetchone()
+                if fallback_row is not None:
+                    default_cached_json = fallback_row[0]
         finally:
             rag_cur.close()
     finally:
         rag_con.close()
 
-    has_history = False
-    svt_row = None
-    svt_con = None
-    svt_cur = None
-    try:
-        if lang == "fi":
-            svt_con = open_svt()
-            svt_cur = svt_con.cursor()
-            found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
-            if found:
-                has_history = True
-                svt_row = found[0]
+    if default_cached_json is not None:
+        fallback_payload = json.loads(default_cached_json)
+        fallback_payload.setdefault("out_lang", lang)
+        body = json.dumps(fallback_payload, separators=(",", ":"), ensure_ascii=False)
+    else:
+        has_history = False
+        svt_row = None
+        svt_con = None
+        svt_cur = None
+        try:
+            if lang == "fi":
+                svt_con = open_svt()
+                svt_cur = svt_con.cursor()
+                found = history.rows(svt_cur, SVT_CURRENT_ROW_SQL, (page_id,))
+                if found:
+                    has_history = True
+                    svt_row = found[0]
 
-        payload, _ = build_summary_payload(
-            article_row=article_row,
-            has_history=has_history,
-            current_svt_row=svt_row,
-            svt_cur=svt_cur,
-            use_llm=False,
-        )
-    finally:
-        if svt_cur is not None:
-            svt_cur.close()
-        if svt_con is not None:
-            svt_con.close()
+            payload, _ = build_summary_payload(
+                article_row=article_row,
+                has_history=has_history,
+                current_svt_row=svt_row,
+                svt_cur=svt_cur,
+                use_llm=False,
+            )
+        finally:
+            if svt_cur is not None:
+                svt_cur.close()
+            if svt_con is not None:
+                svt_con.close()
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
-    job_key = (lang, page_id, rev_id)
+    job_key = (lang, page_id, rev_id, cache_ui)
     if _summary_llm_enabled():
         should_schedule = False
         with _inflight_lock:
@@ -1086,5 +1236,4 @@ def get_summary_response(
         if should_schedule:
             background_tasks.add_task(_background_llm_worker, job_key, llm_client)
 
-    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     return Response(content=body, media_type="application/json")

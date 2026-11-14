@@ -125,9 +125,10 @@ export async function getDiff(pageId, from = "2006", to = "2026") {
 /**
  * GET /api/ask?q=
  */
-export async function ask(q = "") {
-  if (MOCK.ask) return mockAsk(q);
+export async function ask(q = "", ui = null) {
+  if (MOCK.ask) return mockAsk(q, ui);
   const params = new URLSearchParams({ q: String(q || "") });
+  if (ui) params.set("ui", ui);
   return fetchJson(`/api/ask?${params.toString()}`);
 }
 
@@ -191,9 +192,10 @@ export async function getTopicRoad({
 /**
  * GET /api/summary/{lang}/{page_id}
  */
-export async function getSummary(lang = "fi", pageId = 1256) {
+export async function getSummary(lang = "fi", pageId = 1256, ui = null) {
   const safeLang = lang || "fi";
   const safePageId = pageId ?? 1256;
-  if (MOCK.summary) return mockGetSummary(safeLang, safePageId);
-  return fetchJson(`/api/summary/${encodeURIComponent(safeLang)}/${encodeURIComponent(safePageId)}`);
+  if (MOCK.summary) return mockGetSummary(safeLang, safePageId, ui);
+  const qs = ui ? `?ui=${encodeURIComponent(ui)}` : "";
+  return fetchJson(`/api/summary/${encodeURIComponent(safeLang)}/${encodeURIComponent(safePageId)}${qs}`);
 }

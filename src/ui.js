@@ -1,8 +1,13 @@
-const LANG_NAMES = {
-  fi: "Finnish",
-  sv: "Swedish",
-  en: "English",
-};
+import {
+  lang as uiLang,
+  t,
+  fmtNumber,
+  fmtDate,
+  langName,
+  mtFromLabel,
+  fallbackNoteText,
+  setLang,
+} from "./i18n.js";
 
 const KNOWN_ROAD_PAGE_IDS = new Set([1256, 1150]);
 
@@ -40,7 +45,7 @@ function normalizeRoadData(raw) {
   if (Array.isArray(raw.stations)) {
     const stations = raw.stations.map((s, idx) => ({
       no: s.no ?? idx + 1,
-      heading: s.heading || s.title || `Section ${idx + 1}`,
+      heading: s.heading || s.title || t("road.sectionNumbered", { no: idx + 1 }),
       words: s.words ?? 300,
       reading_minutes: s.reading_minutes ?? Math.max(1, Math.round((s.words || 300) / 220)),
       summary: s.summary || s.summary_short || "",
@@ -165,6 +170,7 @@ export function createUI({
   const searchClearBtn = document.getElementById("search-clear-btn");
   const btnAsk = document.getElementById("btn-ask");
   const lensSwitcher = document.getElementById("lens-switcher");
+  const langSwitcher = document.getElementById("lang-switcher");
   const statusLoading = document.getElementById("status-loading");
   const searchFeedback = document.getElementById("search-feedback");
   const searchResultsPanel = document.getElementById("search-results-panel");
@@ -201,6 +207,7 @@ export function createUI({
   const panelTitle = document.getElementById("panel-title");
   const panelCloseBtn = document.getElementById("panel-close-btn");
   const panelLanguages = document.getElementById("panel-languages");
+  const panelSiblingOffer = document.getElementById("panel-sibling-offer");
   const panelTabs = document.getElementById("panel-tabs");
   const tabBtnToday = document.getElementById("tab-btn-today");
   const tabBtnHistory = document.getElementById("tab-btn-history");
@@ -241,12 +248,29 @@ export function createUI({
     });
   });
 
+  langSwitcher?.querySelectorAll(".lang-switch-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const code = btn.dataset.uiLang;
+      if (code && code !== uiLang) {
+        setLang(code);
+      }
+    });
+  });
+
+  panelSiblingOffer?.addEventListener("click", () => {
+    const sLang = panelSiblingOffer.dataset.lang;
+    const sTitle = panelSiblingOffer.dataset.title;
+    if (sLang && sTitle) {
+      onSearchSubmit?.(sTitle, sLang, { openDirectly: true });
+    }
+  });
+
   // Demo prompt chips
   document.querySelectorAll(".prompt-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       const action = chip.dataset.action;
       if (action === "ask") {
-        const q = chip.dataset.query || "How did the Winter War end";
+        const q = chip.dataset.query || t("demo.askQuery");
         searchInput.value = q;
         searchClearBtn.hidden = false;
         onAskSubmit?.(q);
@@ -283,10 +307,12 @@ export function createUI({
     const lower = q.toLowerCase();
     return (
       q.endsWith("?") ||
-      /^(how|what|why|when|where|who|explain|tell)\b/i.test(q) ||
+      /^(how|what|why|when|where|who|explain|tell|miten|mikä|miksi|milloin|missä|kuka|hur|vad|varför|när|var|vem)\b/i.test(q) ||
       lower.includes("kết thúc") ||
       lower.includes("thế nào") ||
-      lower.includes("winter war end")
+      lower.includes("winter war end") ||
+      lower.includes("talvisota päättyi") ||
+      lower.includes("vinterkriget")
     );
   }
 
@@ -307,7 +333,7 @@ export function createUI({
   });
 
   btnAsk.addEventListener("click", () => {
-    const q = searchInput.value.trim() || "How did the Winter War end";
+    const q = searchInput.value.trim() || t("demo.askQuery");
     searchInput.value = q;
     searchClearBtn.hidden = false;
     onAskSubmit?.(q);
@@ -333,7 +359,7 @@ export function createUI({
     statusLoading.hidden = !isLoading;
   }
 
-  function showError(msg = "Couldn't reach the server. Try again.") {
+  function showError(msg = t("error.network")) {
     searchFeedback.textContent = msg;
     searchFeedback.classList.add("is-error");
     searchFeedback.hidden = false;
@@ -360,25 +386,26 @@ export function createUI({
 
     if (rows.length === 0) {
       searchResultsPanel.hidden = true;
-      searchFeedback.textContent = "No articles match. Try a place, a person or a year.";
+      searchFeedback.textContent = t("search.emptyHint");
       searchFeedback.hidden = false;
       return;
     }
 
     searchFeedback.hidden = true;
+    const alsoInPrefix = escapeHtml(t("search.alsoInPrefix"));
     const itemsHtml = rows
       .slice(0, 8)
       .map((r) => {
         const siblings = r.wikidata_id && also[r.wikidata_id] ? also[r.wikidata_id] : [];
         const alsoHtml =
           siblings.length > 0
-            ? `<span class="search-also-group" aria-label="Also in other languages">also in ${siblings
+            ? `<span class="search-also-group" aria-label="Also in other languages">${alsoInPrefix} ${siblings
                 .map(
                   ([sLang, sTitle]) =>
                     `<button type="button" class="also-lang-btn" data-lang="${escapeHtml(
                       sLang
                     )}" data-title="${escapeHtml(sTitle)}" title="${escapeHtml(
-                      `${LANG_NAMES[sLang] || sLang}: ${sTitle}`
+                      `${langName(sLang)}: ${sTitle}`
                     )}"><span class="dot dot-${escapeHtml(sLang)}"></span>${escapeHtml(sLang)}</button>`
                 )
                 .join(" ")}</span>`
@@ -398,8 +425,8 @@ export function createUI({
 
     searchResultsPanel.innerHTML = `
       <div class="overlay-card-header">
-        <span class="overlay-card-label">${rows.length} matching articles</span>
-        <button type="button" class="btn-inline-close" id="close-search-results">Close</button>
+        <span class="overlay-card-label">${escapeHtml(t("search.matchCount", { count: rows.length }))}</span>
+        <button type="button" class="btn-inline-close" id="close-search-results">${escapeHtml(t("nav.close"))}</button>
       </div>
       <div class="search-results-list">${itemsHtml}</div>
     `;
@@ -457,13 +484,13 @@ export function createUI({
 
     let milestonesHtml = "";
     if (!askRes.history_available || !askRes.milestones || askRes.milestones.length === 0) {
-      milestonesHtml = `<p class="ask-no-history">No edit history for this article yet.</p>`;
+      milestonesHtml = `<p class="ask-no-history">${escapeHtml(t("ask.noHistory"))}</p>`;
     } else {
       const n = askRes.milestones.length;
       const nodesHtml = askRes.milestones
         .map((ms, idx) => {
           const isSelected = idx === activeMilestoneIdx;
-          const oldidUrl = `https://fi.wikipedia.org/w/index.php?oldid=${ms.rev_id}`;
+          const oldidUrl = ms.url || buildWikiOldidUrl("fi", ms.rev_id);
           return `
             <div class="milestone-node-card ${isSelected ? "is-active" : ""}">
               <button type="button" class="milestone-node-btn" data-ms-idx="${idx}">
@@ -472,11 +499,11 @@ export function createUI({
                 <span class="milestone-user">${escapeHtml(ms.user)}</span>
               </button>
               <a
-                href="${oldidUrl}"
+                href="${escapeHtml(oldidUrl)}"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="milestone-oldid-link"
-                title="Open revision ${ms.rev_id} on Finnish Wikipedia"
+                title="${escapeHtml(t("ask.openRevisionTitle", { revId: ms.rev_id }))}"
               >oldid=${ms.rev_id}</a>
             </div>
           `;
@@ -490,20 +517,67 @@ export function createUI({
 
       let selectedMsDetailHtml = "";
       if (selectedMs) {
-        const oldidUrl = `https://fi.wikipedia.org/w/index.php?oldid=${selectedMs.rev_id}`;
+        const oldidUrl = selectedMs.url || buildWikiOldidUrl("fi", selectedMs.rev_id);
         const diffHtml = milestoneDiff ? renderDiffPartsHtml(milestoneDiff.parts) : "";
+        const showMsMt = Boolean(askRes.out_lang && askRes.out_lang !== "fi");
+        const msMtHtml = showMsMt
+          ? `<span class="mt-label">${escapeHtml(mtFromLabel(["fi"]))}</span>`
+          : "";
+        const changedBy = selectedMs.changed_by;
+        const changedByHtml = changedBy
+          ? `<span class="milestone-changed-by">${escapeHtml(
+              t("ask.changedBy", {
+                user: changedBy.user || "",
+                date: fmtDate(changedBy.row_start),
+              })
+            )} <a href="${escapeHtml(
+              changedBy.url || buildWikiOldidUrl("fi", changedBy.rev_id)
+            )}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${escapeHtml(
+              changedBy.rev_id
+            )}</a></span>`
+          : "";
+        const metaStripHtml =
+          msMtHtml || changedByHtml
+            ? `<div class="milestone-meta-strip">${msMtHtml}${changedByHtml}</div>`
+            : "";
+
+        const msFacts = Array.isArray(selectedMs.facts) ? selectedMs.facts : [];
+        const msFactsHtml =
+          msFacts.length > 0
+            ? `<div class="facts-source-list">${msFacts
+                .map((f) => {
+                  const factUrl = f.url || oldidUrl;
+                  return renderFactSourceItemHtml({
+                    claimHtml: escapeHtml(f.text || ""),
+                    sourceSentence: f.source_sentence || "",
+                    sourceLang: "fi",
+                    oldidUrl: factUrl,
+                    oldid: extractOldid(factUrl, selectedMs.rev_id),
+                  });
+                })
+                .join("")}</div>`
+            : "";
+
         selectedMsDetailHtml = `
           <div class="milestone-detail-box">
             <div class="milestone-detail-header">
-              <span>Version ${selectedMs.from_year}–${selectedMs.to_year} by ${escapeHtml(selectedMs.user)}</span>
-              <a href="${oldidUrl}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${selectedMs.rev_id}</a>
+              <span>${escapeHtml(
+                t("ask.versionSpan", {
+                  from: selectedMs.from_year,
+                  to: selectedMs.to_year,
+                  user: selectedMs.user,
+                })
+              )}</span>
+              <a href="${escapeHtml(oldidUrl)}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${selectedMs.rev_id}</a>
             </div>
             ${selectedMs.comment ? `<p class="milestone-comment">"${escapeHtml(selectedMs.comment)}"</p>` : ""}
+            ${metaStripHtml}
             <p class="milestone-answer-paragraph">${escapeHtml(selectedMs.answer)}</p>
+            ${msFactsHtml}
             ${
               diffHtml
                 ? `<div class="milestone-inline-diff">
-                    <div class="diff-caption">Word diff against today${todayRevId ? ` (<a href="https://fi.wikipedia.org/w/index.php?oldid=${todayRevId}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${todayRevId}</a>)` : ""}</div>
+                    <div class="diff-caption">${escapeHtml(t("ask.diffToday"))}${todayRevId ? ` (<a href="${escapeHtml(buildWikiOldidUrl("fi", todayRevId))}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${todayRevId}</a>)` : ""}</div>
                     ${diffHtml}
                   </div>`
                 : ""
@@ -514,11 +588,30 @@ export function createUI({
 
       milestonesHtml = `
         <div class="milestone-strip-section">
-          <div class="milestone-strip-title">This answer changed ${n} ${n === 1 ? "time" : "times"}</div>
+          <div class="milestone-strip-title">${escapeHtml(t("ask.changedTimes", { count: n }))}</div>
           <div class="milestone-nodes-row">${nodesHtml}</div>
           ${selectedMsDetailHtml}
         </div>
       `;
+    }
+
+    let askProvenanceHtml = "";
+    if (askRes.out_lang) {
+      if (askRes.out_lang !== uiLang) {
+        askProvenanceHtml = `<p class="i18n-fallback-note">${escapeHtml(
+          fallbackNoteText(askRes.out_lang)
+        )}</p>`;
+      } else {
+        const diffSourceLangs = [];
+        for (const s of askRes.sources || []) {
+          if (s.lang && s.lang !== askRes.out_lang && !diffSourceLangs.includes(s.lang)) {
+            diffSourceLangs.push(s.lang);
+          }
+        }
+        if (diffSourceLangs.length > 0) {
+          askProvenanceHtml = `<div class="mt-label">${escapeHtml(mtFromLabel(diffSourceLangs))}</div>`;
+        }
+      }
     }
 
     const threadsTreeHtml = renderThreadsTreeHtml(topTitle, askRes.top, threads);
@@ -529,8 +622,9 @@ export function createUI({
           <span class="star-glyph" aria-hidden="true">★</span>
           <span>${escapeHtml(topTitle)}</span>
         </button>
-        <button type="button" class="btn-inline-close" id="close-ask-panel">Close</button>
+        <button type="button" class="btn-inline-close" id="close-ask-panel">${escapeHtml(t("nav.close"))}</button>
       </div>
+      ${askProvenanceHtml}
       <div class="ask-answer-body">${formatAnswerText(askRes.answer)}</div>
       ${sourcesHtml ? `<div class="ask-sources-row">${sourcesHtml}</div>` : ""}
       ${milestonesHtml}
@@ -607,7 +701,7 @@ export function createUI({
       <div class="threads-tree" aria-label="Memory threads">
         <div class="threads-tree-root">
           <span class="star-glyph" aria-hidden="true">★</span>
-          <span>Memory threads from ${escapeHtml(sourceTitle)}</span>
+          <span>${escapeHtml(t("threads.heading", { title: sourceTitle }))}</span>
         </div>
         <div class="threads-branches">${branchesHtml}</div>
       </div>
@@ -650,9 +744,9 @@ export function createUI({
       <div class="constellation-hops">${hopsHtml}</div>
       <div class="constellation-actions">
         <button type="button" class="btn-control btn-save-constellation" id="btn-save-constellation">
-          ${savedHash ? `Saved ${escapeHtml(savedHash)}` : "Save this constellation"}
+          ${savedHash ? escapeHtml(t("nav.savedConstellation", { title: savedHash })) : escapeHtml(t("nav.saveConstellation"))}
         </button>
-        <button type="button" class="btn-inline-close" id="btn-clear-constellation">Clear</button>
+        <button type="button" class="btn-inline-close" id="btn-clear-constellation">${escapeHtml(t("nav.clear"))}</button>
       </div>
     `;
     constellationBar.hidden = false;
@@ -915,8 +1009,8 @@ export function createUI({
         const g = item.ghost || item;
         const removedYear = g.removed_year ?? item.removed_year;
         const labelText = removedYear
-          ? `Section removed in ${removedYear}`
-          : item.label || g.heading || "Section removed";
+          ? t("scene.sectionRemoved", { year: removedYear })
+          : item.label || g.heading || t("road.removedSectionFallback");
         if (btn.textContent !== labelText) {
           btn.textContent = labelText;
         }
@@ -969,6 +1063,7 @@ export function createUI({
     };
 
     skyTopBar.hidden = true;
+    if (langSwitcher) langSwitcher.hidden = true;
     timesliderRoot.hidden = true;
     hoverLabel.hidden = true;
     if (skyLegend) skyLegend.hidden = true;
@@ -981,7 +1076,7 @@ export function createUI({
       const eras = roadData.eras || [];
       const eraSpan =
         eras.length > 0 ? ` · ${eras[0].from_year}–${eras[eras.length - 1].to_year}` : "";
-      roadTopicMeta.textContent = `${totalSections} historical milestones${eraSpan}`;
+      roadTopicMeta.textContent = `${t("road.historicalMilestones", { count: totalSections })}${eraSpan}`;
     }
 
     const activePageId = art.page_id ?? topicMeta.page_id;
@@ -1031,18 +1126,19 @@ export function createUI({
     roadEraMinimap.innerHTML = "";
 
     skyTopBar.hidden = false;
+    if (langSwitcher) langSwitcher.hidden = false;
     timesliderRoot.hidden = false;
     if (skyLegend) skyLegend.hidden = false;
   }
 
   function renderLaneDotsHtml(lanes) {
     const laneObj = normalizeLanes(lanes);
-    const dots = [`<span class="dot dot-fi" title="Finnish"></span>`];
+    const dots = [`<span class="dot dot-fi" title="${escapeHtml(langName("fi"))}"></span>`];
     if (laneObj.sv > 0) {
-      dots.push(`<span class="dot dot-sv" title="Swedish"></span>`);
+      dots.push(`<span class="dot dot-sv" title="${escapeHtml(langName("sv"))}"></span>`);
     }
     if (laneObj.en > 0) {
-      dots.push(`<span class="dot dot-en" title="English"></span>`);
+      dots.push(`<span class="dot dot-en" title="${escapeHtml(langName("en"))}"></span>`);
     }
     return dots.join("");
   }
@@ -1050,12 +1146,12 @@ export function createUI({
   function renderLaneCoverageHtml(lanes) {
     const laneObj = normalizeLanes(lanes);
     const coveredNames = [];
-    if (laneObj.sv > 0) coveredNames.push("Swedish");
-    if (laneObj.en > 0) coveredNames.push("English");
+    if (laneObj.sv > 0) coveredNames.push(langName("sv"));
+    if (laneObj.en > 0) coveredNames.push(langName("en"));
     const labelText =
       coveredNames.length > 0
-        ? `Also covered in: ${coveredNames.join(", ")}`
-        : "Finnish only";
+        ? t("road.alsoCoveredIn", { langs: coveredNames.join(", ") })
+        : t("road.finnishOnly");
     return `
       <span class="lane-dots-group">${renderLaneDotsHtml(laneObj)}</span>
       <span class="lane-coverage-text">${escapeHtml(labelText)}</span>
@@ -1087,21 +1183,21 @@ export function createUI({
           <article class="road-card is-nearest is-ghost-station" aria-label="Removed Wikipedia section">
             <div class="road-ghost-badge-row">
               <span class="road-ghost-badge">
-                Section removed in ${escapeHtml(remYr)} (existed ${escapeHtml(fromYr)}–${escapeHtml(remYr)})
+                ${escapeHtml(t("road.removedInExisted", { from: fromYr, removed: remYr }))}
               </span>
             </div>
             <div class="road-card-header-row">
-              <h2 class="road-card-title">${escapeHtml(activeGhost.heading || "Removed section")}</h2>
+              <h2 class="road-card-title">${escapeHtml(activeGhost.heading || t("road.removedSectionFallback"))}</h2>
             </div>
             <div class="road-ghost-body" tabindex="0">
-              <div class="road-ghost-removed-note">Archived section text removed from Wikipedia in ${escapeHtml(remYr)}</div>
+              <div class="road-ghost-removed-note">${escapeHtml(t("road.archivedIn", { year: remYr }))}</div>
               <div class="road-ghost-markdown">
                 ${renderStationMarkdownHtml(activeGhost.text, activeGhost.heading, null, [])}
               </div>
             </div>
             <div class="road-card-footer">
               <button type="button" class="btn-control btn-return-from-ghost" id="btn-return-from-ghost">
-                Return to section ${escapeHtml(afterNo)}
+                ${escapeHtml(t("road.returnToSection", { no: afterNo }))}
               </button>
             </div>
           </article>
@@ -1135,7 +1231,12 @@ export function createUI({
         const secNo = String(st.no ?? idx + 1).padStart(2, "0");
         const metricsText = isTopicRoad
           ? escapeHtml(st.event_label || (st.event_year ? String(st.event_year) : ""))
-          : `${Number(st.words || 0).toLocaleString("en-US")} words · ${st.reading_minutes || 1} min read`;
+          : escapeHtml(
+              t("road.wordsAndMins", {
+                words: fmtNumber(st.words || 0),
+                mins: fmtNumber(st.reading_minutes || 1),
+              })
+            );
         return `
           <article
             class="road-card ${slotClass}"
@@ -1146,7 +1247,9 @@ export function createUI({
           >
             <div class="horizon-strip-row">
               <div class="horizon-strip-left">
-                <span class="horizon-section-no">${isTopicRoad ? secNo : `Section ${secNo}`}</span>
+                <span class="horizon-section-no">${escapeHtml(
+                  isTopicRoad ? secNo : t("road.sectionNumbered", { no: secNo })
+                )}</span>
                 <h3 class="horizon-heading">${escapeHtml(st.heading)}</h3>
               </div>
               <div class="horizon-strip-right">
@@ -1168,16 +1271,14 @@ export function createUI({
       const warYears = Array.isArray(st.history.war_years) ? st.history.war_years : [];
       const warDot =
         warYears.length > 0
-          ? `<span class="dot dot-war" title="Edit war in ${escapeHtml(warYears.join(", "))}"></span>`
+          ? `<span class="dot dot-war" title="${escapeHtml(t("road.editWarIn", { years: warYears.join(", ") }))}"></span>`
           : "";
       const changesCount = st.history.changes ?? 1;
-      const verb = isTopicRoad ? "changed" : "rewritten";
+      const badgeKey = isTopicRoad ? "road.addedChangedTimes" : "road.addedRewrittenTimes";
       memoryBadgeHtml = `
         <div class="road-memory-badge">
           ${warDot}
-          <span>Added ${st.history.added_year} · ${verb} ${changesCount} ${
-            changesCount === 1 ? "time" : "times"
-          }</span>
+          <span>${escapeHtml(t(badgeKey, { year: st.history.added_year, count: changesCount }))}</span>
         </div>
       `;
     }
@@ -1227,19 +1328,21 @@ export function createUI({
     const isPostsCollapsed = !expandedSection && !showAllPosts && posts.length > maxIdlePosts;
     const visiblePosts = isPostsCollapsed ? posts.slice(0, maxIdlePosts) : posts;
     const postsMoreChipHtml = isPostsCollapsed
-      ? `<button type="button" class="road-post-chip road-post-more-chip" id="btn-road-more-posts">+${
-          posts.length - maxIdlePosts
-        } more</button>`
+      ? `<button type="button" class="road-post-chip road-post-more-chip" id="btn-road-more-posts">${escapeHtml(
+          t("summary.moreSubsections", { count: posts.length - maxIdlePosts })
+        )}</button>`
       : !expandedSection && showAllPosts && posts.length > maxIdlePosts
-      ? `<button type="button" class="road-post-chip road-post-more-chip" id="btn-road-less-posts">Show fewer</button>`
+      ? `<button type="button" class="road-post-chip road-post-more-chip" id="btn-road-less-posts">${escapeHtml(
+          t("road.showFewer")
+        )}</button>`
       : "";
     const postsHtml =
       posts.length > 0
         ? `
           <div class="road-posts-row" aria-label="Subsections in this section">
-            <span class="road-posts-label">${posts.length} ${
-              posts.length === 1 ? "subsection" : "subsections"
-            }:</span>
+            <span class="road-posts-label">${escapeHtml(
+              t("road.subsectionsCount", { count: posts.length })
+            )}</span>
             <div class="road-posts-chips">
               ${visiblePosts
                 .map(
@@ -1250,7 +1353,9 @@ export function createUI({
                     data-post-idx="${pIdx}"
                   >
                     <span class="post-chip-heading">${escapeHtml(p.heading)}</span>
-                    <span class="post-chip-words">· ${p.words}w</span>
+                    <span class="post-chip-words">· ${escapeHtml(
+                      t("road.shortWords", { count: fmtNumber(p.words) })
+                    )}</span>
                   </button>
                 `
                 )
@@ -1282,10 +1387,14 @@ export function createUI({
               .map(
                 (g, gIdx) => `
                 <button type="button" class="road-card-ghost-btn" data-card-ghost-idx="${gIdx}">
-                  <span class="ghost-btn-badge">Section removed in ${escapeHtml(g.removed_year)}</span>
-                  <span class="ghost-btn-heading">${escapeHtml(g.heading)} (existed ${escapeHtml(
-                    g.from_year
-                  )}–${escapeHtml(g.removed_year)})</span>
+                  <span class="ghost-btn-badge">${escapeHtml(t("scene.sectionRemoved", { year: g.removed_year }))}</span>
+                  <span class="ghost-btn-heading">${escapeHtml(
+                    t("road.removedHeadingExisted", {
+                      heading: g.heading,
+                      from: g.from_year,
+                      removed: g.removed_year,
+                    })
+                  )}</span>
                 </button>
               `
               )
@@ -1315,12 +1424,15 @@ export function createUI({
         : "";
 
     const metaLeftText = isTopicRoad
-      ? `Milestone ${idx + 1} of ${stations.length}${
+      ? `${escapeHtml(t("road.milestoneCounter", { current: idx + 1, total: stations.length }))}${
           st.event_label ? ` · ${escapeHtml(st.event_label)}` : ""
         }`
-      : `Section ${st.no} of ${stations.length} · ${Number(st.words || 0).toLocaleString(
-          "en-US"
-        )} words · ${st.reading_minutes || 1} min read`;
+      : `${escapeHtml(t("road.sectionCounter", { current: st.no, total: stations.length }))} · ${escapeHtml(
+          t("road.wordsAndMins", {
+            words: fmtNumber(st.words || 0),
+            mins: fmtNumber(st.reading_minutes || 1),
+          })
+        )}`;
 
     const canOpenArticle = isTopicRoad ? Boolean(st.page_id) : Boolean(roadData.article?.page_id);
 
@@ -1354,16 +1466,18 @@ export function createUI({
               id="btn-road-prev"
               ${idx === 0 ? "disabled" : ""}
             >
-              Previous
+              ${escapeHtml(t("nav.prev"))}
             </button>
-            <span class="road-step-counter">${idx + 1} of ${stations.length}</span>
+            <span class="road-step-counter">${escapeHtml(
+              t("road.stepOfTotal", { current: idx + 1, total: stations.length })
+            )}</span>
             <button
               type="button"
               class="btn-control btn-road-step"
               id="btn-road-next"
               ${idx >= stations.length - 1 ? "disabled" : ""}
             >
-              Next
+              ${escapeHtml(t("nav.next"))}
             </button>
           </div>
           <div class="road-footer-actions">
@@ -1373,21 +1487,21 @@ export function createUI({
               id="btn-road-toggle-section"
               aria-expanded="${expandedSection ? "true" : "false"}"
             >
-              ${
+              ${escapeHtml(
                 expandedSection
                   ? isTopicRoad
-                    ? "Hide details"
-                    : "Hide section text"
+                    ? t("road.hideDetails")
+                    : t("nav.hideText")
                   : isTopicRoad
-                  ? "Read milestone"
-                  : "Read this section"
-              }
+                  ? t("road.readMilestone")
+                  : t("road.readThisSection")
+              )}
             </button>
             ${
               canOpenArticle
-                ? `<button type="button" class="btn-control btn-read-full-article" id="btn-road-read-full">${
-                    isTopicRoad ? "Open article" : "Open full article"
-                  }</button>`
+                ? `<button type="button" class="btn-control btn-read-full-article" id="btn-road-read-full">${escapeHtml(
+                    isTopicRoad ? t("nav.openArticle") : t("nav.openFullArticle")
+                  )}</button>`
                 : ""
             }
           </div>
@@ -1515,7 +1629,7 @@ export function createUI({
       eras.find((e) => evYear >= e.from_year && evYear <= e.to_year) || eras[0] || null;
     const eraCaption = activeEra
       ? `${activeEra.from_year}–${activeEra.to_year} · ${activeEra.label}`
-      : roadData.topic?.title || "Historical road";
+      : roadData.topic?.title || t("road.historicalRoadFallback");
 
     const bandsPieces = stations.map((st, idx) => {
       const isRead = idx < activeIndex || Boolean(visitedIndices?.has(idx));
@@ -1541,7 +1655,9 @@ export function createUI({
           <span class="era-minimap-progress">${escapeHtml(eraCaption)}</span>
           <span class="era-minimap-sublabel">${escapeHtml(currentSt.heading)}</span>
         </div>
-        <div class="era-minimap-section-fallback" id="era-minimap-year-numeral">Milestone ${activeIndex + 1} of ${stations.length}</div>
+        <div class="era-minimap-section-fallback" id="era-minimap-year-numeral">${escapeHtml(
+          t("road.milestoneCounter", { current: activeIndex + 1, total: stations.length })
+        )}</div>
       </div>
       <div class="toc-bands-row" role="navigation" aria-label="Topic road milestones minimap">${bandsPieces.join("")}</div>
     `;
@@ -1575,12 +1691,18 @@ export function createUI({
     const sections = summaryData.sections || [];
     const ghosts = summaryData.ghost_sections || [];
     const summaryMinutes = computeSummaryMinutes(summaryData);
+    const revId = summaryData.rev_id ?? art.rev_id ?? null;
+    const mode = summaryData.mode || "extractive";
+    const outLang = summaryData.out_lang ?? null;
 
     const items = [
       {
         kind: "overview",
         index: 0,
         article: art,
+        revId,
+        mode,
+        outLang,
         tldr: summaryData.tldr || "",
         facts: (summaryData.facts || []).slice(0, 3),
         summaryMinutes,
@@ -1596,6 +1718,9 @@ export function createUI({
             index: items.length,
             ghost: g,
             article: art,
+            revId,
+            mode,
+            outLang,
             totalSections: sections.length,
           });
         }
@@ -1609,6 +1734,9 @@ export function createUI({
         index: items.length,
         section: sec,
         article: art,
+        revId,
+        mode,
+        outLang,
         totalSections: sections.length,
       });
       pushGhostsAfter(sec.no);
@@ -1621,6 +1749,9 @@ export function createUI({
           index: items.length,
           ghost: g,
           article: art,
+          revId,
+          mode,
+          outLang,
           totalSections: sections.length,
         });
       }
@@ -1628,41 +1759,87 @@ export function createUI({
     return { items, summaryMinutes };
   }
 
+  function renderSummaryFactsHtml(facts, { isFocused, isTranslated, artLang, revId, allowChips = false }) {
+    const list = Array.isArray(facts) ? facts : [];
+    if (list.length === 0) return "";
+    if (isFocused && isTranslated) {
+      const revUrl = revId ? buildWikiOldidUrl(artLang, revId) : null;
+      return `<div class="facts-source-list">${list
+        .map((f) =>
+          renderFactSourceItemHtml({
+            claimHtml: `<strong>${escapeHtml(f.label || "")}:</strong> ${escapeHtml(f.value || "")}`,
+            sourceSentence: f.source || "",
+            sourceLang: artLang,
+            oldidUrl: revUrl,
+            oldid: revId,
+          })
+        )
+        .join("")}</div>`;
+    }
+    if (!allowChips) return "";
+    return `<div class="summary-trail-facts">${list
+      .map(
+        (f) => `
+          <span class="summary-trail-fact-chip">
+            <strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.value)}
+          </span>
+        `
+      )
+      .join("")}</div>`;
+  }
+
   function renderSummaryCardHtml(item, { isFocused = false, diff = 0, readMoreOpen = false } = {}) {
     const art = item.article || {};
-    const langDotClass = art.lang === "sv" ? "dot-sv" : art.lang === "en" ? "dot-en" : "dot-fi";
+    const artLang = art.lang || "fi";
+    const langDotClass = artLang === "sv" ? "dot-sv" : artLang === "en" ? "dot-en" : "dot-fi";
     const isFar = !isFocused && diff >= 3;
 
     if (isFar) {
       const label =
         item.kind === "overview"
-          ? art.title || "Overview"
+          ? art.title || t("panel.overview")
           : item.kind === "ghost"
-            ? `Removed in ${item.ghost.removed_year}: ${item.ghost.heading}`
+            ? t("summary.ghostShort", {
+                year: item.ghost.removed_year,
+                heading: item.ghost.heading,
+              })
             : `${item.section.no}. ${item.section.heading}`;
       return `<h3 class="summary-trail-title">${escapeHtml(label)}</h3>`;
     }
 
+    const effectiveOutLang = item.outLang || artLang;
+    const isFallback = effectiveOutLang !== uiLang;
+    const isTranslated = item.mode === "llm" && effectiveOutLang === uiLang && effectiveOutLang !== artLang;
+    const provenanceHtml =
+      isFocused && isFallback
+        ? `<p class="i18n-fallback-note">${escapeHtml(fallbackNoteText(effectiveOutLang))}</p>`
+        : !isFallback && isTranslated
+        ? `<div class="mt-label">${escapeHtml(mtFromLabel([artLang]))}</div>`
+        : "";
+
     if (item.kind === "overview") {
       const readMins = art.reading_minutes || 1;
       const sumMins = item.summaryMinutes || 1;
-      const factsHtml = (item.facts || [])
-        .map(
-          (f) => `
-          <span class="summary-trail-fact-chip">
-            <strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.value)}
-          </span>
-        `
-        )
-        .join("");
+      const factsHtml = renderSummaryFactsHtml(item.facts, {
+        isFocused,
+        isTranslated,
+        artLang,
+        revId: item.revId,
+        allowChips: true,
+      });
       return `
         <div class="summary-trail-kicker">
-          <span class="summary-trail-kicker-left"><span class="dot ${langDotClass}"></span>Overview</span>
-          <span class="summary-trail-kicker-right">${readMins} min → ${sumMins} min</span>
+          <span class="summary-trail-kicker-left"><span class="dot ${langDotClass}"></span>${escapeHtml(
+            t("panel.overview")
+          )}</span>
+          <span class="summary-trail-kicker-right">${escapeHtml(
+            t("summary.timeCompare", { read: fmtNumber(readMins), summary: fmtNumber(sumMins) })
+          )}</span>
         </div>
         <h2 class="summary-trail-title">${escapeHtml(art.title || "")}</h2>
+        ${provenanceHtml}
         <p class="summary-trail-tldr">${formatInlineMd(item.tldr || "")}</p>
-        ${factsHtml ? `<div class="summary-trail-facts">${factsHtml}</div>` : ""}
+        ${factsHtml}
       `;
     }
 
@@ -1672,24 +1849,36 @@ export function createUI({
         isFocused && readMoreOpen
           ? `
             <div class="summary-readmore-body">
-              <div class="summary-readmore-removed-note">Archived Wikipedia section (${escapeHtml(g.from_year)}–${escapeHtml(g.removed_year)}, removed in ${escapeHtml(g.removed_year)})</div>
+              <div class="summary-readmore-removed-note">${escapeHtml(
+                t("summary.archivedSectionMeta", {
+                  from: g.from_year,
+                  to: g.removed_year,
+                  removed: g.removed_year,
+                })
+              )}</div>
               ${renderMarkdownHtml(g.text || "", art.title || "")}
             </div>
           `
           : "";
       return `
         <div class="summary-trail-kicker">
-          <span class="summary-trail-kicker-left"><span class="summary-ghost-badge">Removed in ${escapeHtml(g.removed_year)}</span></span>
+          <span class="summary-trail-kicker-left"><span class="summary-ghost-badge">${escapeHtml(
+            t("scene.sectionRemoved", { year: g.removed_year })
+          )}</span></span>
           <span class="summary-trail-kicker-right">${escapeHtml(g.from_year)}–${escapeHtml(g.removed_year)}</span>
         </div>
         <h3 class="summary-trail-title">${escapeHtml(g.heading)}</h3>
-        <p class="summary-trail-oneline">${isFocused ? formatInlineMd(g.text || "") : escapeHtml(`Section archived in ${g.removed_year}.`)}</p>
+        <p class="summary-trail-oneline">${
+          isFocused
+            ? formatInlineMd(g.text || "")
+            : escapeHtml(t("summary.archivedInYear", { year: g.removed_year }))
+        }</p>
         ${
           isFocused
             ? `
               <div class="summary-card-actions">
                 <button type="button" class="summary-readmore-btn" aria-expanded="${readMoreOpen ? "true" : "false"}">
-                  ${readMoreOpen ? "Hide archived text" : "Read more"}
+                  ${escapeHtml(readMoreOpen ? t("summary.hideArchivedText") : t("summary.readMore"))}
                 </button>
               </div>
               ${bodyHtml}
@@ -1704,8 +1893,13 @@ export function createUI({
     const hasWars = Boolean(hist && Array.isArray(hist.war_years) && hist.war_years.length > 0);
     const historyBadgeHtml = hist
       ? `<span class="summary-history-badge">${
-          hasWars ? `<span class="dot dot-war" title="Edit war years"></span>` : ""
-        }rewritten ${hist.changes} ${hist.changes === 1 ? "time" : "times"}</span>`
+          hasWars ? `<span class="dot dot-war" title="${escapeHtml(t("summary.editWarTitle"))}"></span>` : ""
+        }${escapeHtml(
+          t("summary.rewrittenTimes", {
+            count: hist.changes,
+            formattedCount: fmtNumber(hist.changes),
+          })
+        )}</span>`
       : "";
 
     const oneLine = String(sec.one_line || "").trim();
@@ -1719,6 +1913,14 @@ export function createUI({
       }
     }
 
+    const secFactsHtml = renderSummaryFactsHtml(sec.facts, {
+      isFocused,
+      isTranslated,
+      artLang,
+      revId: item.revId,
+      allowChips: false,
+    });
+
     const readMoreHtml =
       isFocused && readMoreOpen
         ? `<div class="summary-readmore-body">${renderMarkdownHtml(sec.text || "", art.title || "")}</div>`
@@ -1726,18 +1928,22 @@ export function createUI({
 
     return `
       <div class="summary-trail-kicker">
-        <span class="summary-trail-kicker-left">Section ${sec.no}</span>
-        <span class="summary-trail-kicker-right">${historyBadgeHtml}<span>${sec.reading_minutes || 1} min read</span></span>
+        <span class="summary-trail-kicker-left">${escapeHtml(t("summary.sectionKicker", { no: sec.no }))}</span>
+        <span class="summary-trail-kicker-right">${historyBadgeHtml}<span>${escapeHtml(
+          t("summary.minRead", { count: sec.reading_minutes || 1 })
+        )}</span></span>
       </div>
       <h3 class="summary-trail-title">${escapeHtml(sec.heading)}</h3>
+      ${provenanceHtml}
       <p class="summary-trail-oneline">${formatInlineMd(oneLine)}</p>
       ${extraSummary ? `<p class="summary-trail-summary">${formatInlineMd(extraSummary)}</p>` : ""}
+      ${secFactsHtml}
       ${
         isFocused
           ? `
             <div class="summary-card-actions">
               <button type="button" class="summary-readmore-btn" aria-expanded="${readMoreOpen ? "true" : "false"}">
-                ${readMoreOpen ? "Hide original text" : "Read more"}
+                ${escapeHtml(readMoreOpen ? t("nav.hideText") : t("summary.readMore"))}
               </button>
             </div>
             ${readMoreHtml}
@@ -1791,11 +1997,18 @@ export function createUI({
     if (summaryProgressText && currentItem) {
       if (currentItem.kind === "overview") {
         summaryProgressText.textContent =
-          totalSections > 0 ? `Overview · ${totalSections} sections` : "Overview · 1 of 1";
+          totalSections > 0
+            ? t("summary.progressOverview", { count: totalSections })
+            : t("summary.progressOverviewSingle");
       } else if (currentItem.kind === "ghost") {
-        summaryProgressText.textContent = `Removed in ${currentItem.ghost.removed_year}`;
+        summaryProgressText.textContent = t("scene.sectionRemoved", {
+          year: currentItem.ghost.removed_year,
+        });
       } else {
-        summaryProgressText.textContent = `Section ${currentItem.section.no} of ${totalSections}`;
+        summaryProgressText.textContent = t("summary.sectionOf", {
+          no: currentItem.section.no,
+          total: totalSections,
+        });
       }
     }
     if (summaryPrevBtn) summaryPrevBtn.disabled = focusIdx <= 0;
@@ -1844,6 +2057,7 @@ export function createUI({
     };
 
     skyTopBar.hidden = true;
+    if (langSwitcher) langSwitcher.hidden = true;
     timesliderRoot.hidden = true;
     hoverLabel.hidden = true;
     if (skyLegend) skyLegend.hidden = true;
@@ -1853,8 +2067,12 @@ export function createUI({
     if (summaryTrailMeta) {
       summaryTrailMeta.textContent =
         totalSections > 0
-          ? `${totalSections} sections · ${art.reading_minutes || 1} min → ${summaryMinutes} min`
-          : `Overview · ${art.reading_minutes || 1} min`;
+          ? t("summary.metaSections", {
+              count: totalSections,
+              read: fmtNumber(art.reading_minutes || 1),
+              summary: fmtNumber(summaryMinutes),
+            })
+          : t("summary.metaOverview", { read: fmtNumber(art.reading_minutes || 1) });
     }
 
     if (summaryTopBar) summaryTopBar.hidden = false;
@@ -1911,6 +2129,7 @@ export function createUI({
       summaryFocusedOverlay.innerHTML = "";
     }
     skyTopBar.hidden = false;
+    if (langSwitcher) langSwitcher.hidden = false;
     timesliderRoot.hidden = false;
     if (skyLegend) skyLegend.hidden = false;
   }
@@ -2080,7 +2299,7 @@ export function createUI({
       panelThumbCredit.href = `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(
         article.thumb_file
       )}`;
-      panelThumbCredit.textContent = `Wikimedia Commons: ${article.thumb_file}`;
+      panelThumbCredit.textContent = t("panel.commonsCredit", { file: article.thumb_file });
       panelThumbFigure.hidden = false;
     } else {
       panelThumbFigure.hidden = true;
@@ -2106,9 +2325,9 @@ export function createUI({
       btn.type = "button";
       btn.className = isCurrent ? "lang-version-btn is-active" : "lang-version-btn";
       btn.setAttribute("aria-pressed", isCurrent ? "true" : "false");
-      btn.innerHTML = `<span class="dot dot-${escapeHtml(lCode)}"></span><span>${
-        LANG_NAMES[lCode] || lCode
-      }</span>`;
+      btn.innerHTML = `<span class="dot dot-${escapeHtml(lCode)}"></span><span>${escapeHtml(
+        langName(lCode)
+      )}</span>`;
       btn.title = lTitle;
       btn.addEventListener("click", () => {
         if (!isCurrent) {
@@ -2116,6 +2335,30 @@ export function createUI({
         }
       });
       panelLanguages.appendChild(btn);
+    }
+
+    // Sibling-article offer when opening an article in another language and ui-language sibling exists
+    if (panelSiblingOffer) {
+      const sibling =
+        article.lang !== uiLang
+          ? (article.other_languages || []).find((entry) => entry[0] === uiLang)
+          : null;
+      if (sibling) {
+        const [sLang, sTitle] = sibling;
+        panelSiblingOffer.innerHTML = `<span class="dot dot-${escapeHtml(
+          sLang
+        )}"></span><span class="sibling-offer-prefix">${escapeHtml(
+          t(`panel.siblingRead.${sLang}`)
+        )}</span><span class="sibling-offer-title">${escapeHtml(sTitle)}</span>`;
+        panelSiblingOffer.dataset.lang = sLang;
+        panelSiblingOffer.dataset.title = sTitle;
+        panelSiblingOffer.hidden = false;
+      } else {
+        panelSiblingOffer.hidden = true;
+        panelSiblingOffer.innerHTML = "";
+        delete panelSiblingOffer.dataset.lang;
+        delete panelSiblingOffer.dataset.title;
+      }
     }
 
     // Tabs visibility based on has_history
@@ -2153,11 +2396,20 @@ export function createUI({
 
   function renderThroughTimeTab({ article, timeline, asof, diff, selectedYear }) {
     const s = timeline.summary;
+    const artLang = article.lang || "fi";
     panelSvtSummary.innerHTML = `
-      <div class="svt-stat"><strong>${s.versions.toLocaleString("en-US")}</strong> versions</div>
-      <div class="svt-stat"><strong>${s.reverts.toLocaleString("en-US")}</strong> reverts</div>
-      <div class="svt-stat"><strong>${s.disputes.toLocaleString("en-US")}</strong> disputes</div>
-      <div class="svt-stat"><span class="dot dot-war"></span><strong>${s.war_months}</strong> edit-war months</div>
+      <div class="svt-stat"><strong>${escapeHtml(fmtNumber(s.versions))}</strong> ${escapeHtml(
+        t("panel.versionsWord", { count: s.versions })
+      )}</div>
+      <div class="svt-stat"><strong>${escapeHtml(fmtNumber(s.reverts))}</strong> ${escapeHtml(
+        t("panel.revertsWord", { count: s.reverts })
+      )}</div>
+      <div class="svt-stat"><strong>${escapeHtml(fmtNumber(s.disputes))}</strong> ${escapeHtml(
+        t("panel.disputesWord", { count: s.disputes })
+      )}</div>
+      <div class="svt-stat"><span class="dot dot-war"></span><strong>${escapeHtml(
+        fmtNumber(s.war_months)
+      )}</strong> ${escapeHtml(t("timeslider.warMonthsWord", { count: s.war_months }))}</div>
     `;
 
     // Monthly bar strip
@@ -2173,7 +2425,11 @@ export function createUI({
       if (m.disputes >= 3) bar.classList.add("is-war");
       if (mYear <= selectedYear) bar.classList.add("is-past");
       bar.style.height = `${Math.max(14, Math.round((m.edits / maxEdits) * 100))}%`;
-      bar.title = `${m.month}: ${m.edits} edits, ${m.disputes} disputes`;
+      bar.title = t("panel.monthBarTitle", {
+        month: m.month,
+        edits: fmtNumber(m.edits),
+        disputes: fmtNumber(m.disputes),
+      });
       bar.addEventListener("click", () => {
         onSelectAsOfYear?.(article.page_id, mYear);
       });
@@ -2183,9 +2439,9 @@ export function createUI({
 
     // Quick year buttons for rehearsable demo (2006 / 2012 / Today)
     const presetYears = [
-      { label: "2006", year: 2006 },
-      { label: "2012", year: 2012 },
-      { label: "Today", year: 2026 },
+      { year: 2006, label: t("panel.asOfYear", { year: 2006 }) },
+      { year: 2012, label: t("panel.asOfYear", { year: 2012 }) },
+      { year: 2026, label: t("panel.asOfToday") },
     ];
     panelSvtPresets.innerHTML = presetYears
       .map(
@@ -2201,7 +2457,7 @@ export function createUI({
           }"
           data-year="${p.year}"
         >
-          As of ${p.label}
+          ${escapeHtml(p.label)}
         </button>
       `
       )
@@ -2214,20 +2470,23 @@ export function createUI({
     });
 
     if (!asof) {
-      panelAsofMeta.innerHTML = `<p class="asof-not-born">Article had not been created yet in ${selectedYear} (first edit: ${s.first_edit.slice(0, 10)}).</p>`;
+      panelAsofMeta.innerHTML = `<p class="asof-not-born">${escapeHtml(
+        t("panel.noArticleThen", { year: selectedYear })
+      )} (${escapeHtml(t("panel.firstEdit", { date: fmtDate(s.first_edit) }))})</p>`;
       panelAsofBlocks.innerHTML = "";
       panelDiffSection.innerHTML = "";
       return;
     }
 
-    const oldidUrl = `https://fi.wikipedia.org/w/index.php?oldid=${asof.rev_id}`;
+    const oldidUrl = buildWikiOldidUrl(artLang, asof.rev_id);
     panelAsofMeta.innerHTML = `
       <div class="asof-meta-top">
         <span class="asof-year-badge">${selectedYear}</span>
-        <span class="asof-editor">Edited by <strong>${escapeHtml(asof.user)}</strong> on ${escapeHtml(
-      asof.row_start.slice(0, 10)
-    )}</span>
-        <a href="${oldidUrl}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${asof.rev_id}</a>
+        <span class="asof-editor">${t("panel.editedByOn", {
+          user: `<strong>${escapeHtml(asof.user)}</strong>`,
+          date: escapeHtml(fmtDate(asof.row_start)),
+        })}</span>
+        <a href="${escapeHtml(oldidUrl)}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${asof.rev_id}</a>
       </div>
       ${asof.comment ? `<p class="asof-comment">"${escapeHtml(asof.comment)}"</p>` : ""}
     `;
@@ -2241,11 +2500,13 @@ export function createUI({
       .join("");
 
     if (diff && diff.parts) {
-      const todayOldidUrl = `https://fi.wikipedia.org/w/index.php?oldid=${article.rev_id}`;
+      const todayOldidUrl = buildWikiOldidUrl(artLang, article.rev_id);
       panelDiffSection.innerHTML = `
         <div class="diff-header">
-          <span>Word diff against today</span>
-          <a href="${todayOldidUrl}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">today oldid=${article.rev_id}</a>
+          <span>${escapeHtml(t("panel.diffToday"))}</span>
+          <a href="${escapeHtml(todayOldidUrl)}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">${escapeHtml(
+        t("panel.todayOldid", { id: article.rev_id })
+      )}</a>
         </div>
         <div class="diff-body">${renderDiffPartsHtml(diff.parts)}</div>
       `;
@@ -2350,7 +2611,9 @@ function renderStationMarkdownHtml(markdown, stationHeading, activePostHeading =
 
   if (activePostHeading && !foundHighlightedHeading) {
     const matchedPost = (posts || []).find((p) => p.heading === activePostHeading);
-    const wordsNote = matchedPost?.words ? ` · ${matchedPost.words} words` : "";
+    const wordsNote = matchedPost?.words
+      ? ` · ${t("summary.words", { count: fmtNumber(matchedPost.words) })}`
+      : "";
     out.unshift(
       `<h4 class="reader-sub-heading is-highlighted-subsection" data-sub-heading="${escapeHtml(
         activePostHeading
@@ -2365,9 +2628,9 @@ function renderDiffPartsHtml(parts = []) {
   return parts
     .map((part) => {
       if (part.op === "same") {
-        return `<div class="diff-same">${part.count} unchanged ${
-          part.count === 1 ? "block" : "blocks"
-        }</div>`;
+        return `<div class="diff-same">${escapeHtml(
+          t("panel.unchangedBlocks", { count: part.count })
+        )}</div>`;
       }
       if (part.op === "del") {
         return `<div class="diff-block diff-del"><del>${escapeHtml(part.block[1])}</del></div>`;
@@ -2455,4 +2718,36 @@ function escapeHtml(str) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function buildWikiOldidUrl(langCode, revId) {
+  const safeLang = ["fi", "sv", "en"].includes(langCode) ? langCode : "fi";
+  return `https://${safeLang}.wikipedia.org/w/index.php?oldid=${encodeURIComponent(revId)}`;
+}
+
+function extractOldid(url, fallbackRevId = null) {
+  const m = String(url || "").match(/[?&]oldid=(\d+)/);
+  return m ? m[1] : fallbackRevId;
+}
+
+function renderFactSourceItemHtml({ claimHtml, sourceSentence, sourceLang, oldidUrl, oldid }) {
+  const anchorHtml =
+    oldidUrl && oldid != null
+      ? ` <a href="${escapeHtml(oldidUrl)}" target="_blank" rel="noopener noreferrer" class="oldid-anchor">oldid=${escapeHtml(
+          oldid
+        )}</a>`
+      : "";
+  const quoteHtml = sourceSentence
+    ? `<blockquote class="fact-source-quote"><span class="fact-source-text" lang="${escapeHtml(
+        sourceLang
+      )}">${escapeHtml(sourceSentence)}</span>${anchorHtml}</blockquote>`
+    : anchorHtml
+    ? `<div class="fact-source-quote">${anchorHtml}</div>`
+    : "";
+  return `
+    <div class="fact-source-item">
+      <div class="fact-claim">${claimHtml}</div>
+      ${quoteHtml}
+    </div>
+  `;
 }

@@ -603,13 +603,13 @@ def get_diff(
 
 
 @app.get("/api/summary/{lang}/{page_id}")
-def get_summary(lang: str, page_id: int, background_tasks: BackgroundTasks):
-    return summary.get_summary_response(lang, page_id, background_tasks)
+def get_summary(lang: str, page_id: int, background_tasks: BackgroundTasks, ui: str | None = None):
+    return summary.get_summary_response(lang, page_id, background_tasks, ui=ui)
 
 
 @app.get("/api/ask")
-def get_ask(background_tasks: BackgroundTasks, q: str | None = None):
-    return ask.get_ask_response(q, background_tasks)
+def get_ask(background_tasks: BackgroundTasks, q: str | None = None, ui: str | None = None):
+    return ask.get_ask_response(q, background_tasks, ui=ui)
 
 
 if DIST_DIR.is_dir():

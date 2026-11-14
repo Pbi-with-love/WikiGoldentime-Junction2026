@@ -296,6 +296,23 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
   }
   assert.equal(noHist.history_available, false);
   assert.deepEqual(noHist.milestones, []);
+
+  // Translated ask (?ui=sv) returns out_lang="sv" and preserves grounded original-language sources
+  const resSv = await ask("How did the Winter War end?", "sv");
+  assert.equal(resSv.history_available, true);
+  assert.equal(resSv.out_lang, "sv");
+  assert.ok(Array.isArray(resSv.sources) && resSv.sources.length >= 1);
+  assert.ok(Array.isArray(resSv.milestones) && resSv.milestones.length >= 2);
+  if (MOCK.ask) {
+    assert.ok(resSv.answer.includes("[mock] (sv)"));
+  } else {
+    assert.equal(resSv.pending, false);
+    assert.ok(!resSv.answer.includes("[mock]"));
+    for (const fact of resSv.facts || []) {
+      assert.ok(typeof fact.source_sentence === "string" && fact.source_sentence.length > 0);
+      assert.ok(typeof fact.url === "string" && fact.url.includes("oldid="));
+    }
+  }
 });
 
 test("GET /api/threads supports Demo Path C (5-hop chain from 52097 with ghost thread)", async () => {
@@ -573,6 +590,27 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
   for (const f of shortSummary.facts) assertFactShape(f);
   assert.deepEqual(shortSummary.sections, []);
   assert.deepEqual(shortSummary.ghost_sections, []);
+
+  // 5. Translated summary (?ui=sv for fi:1256) returns out_lang="sv" and preserves Finnish source sentences
+  const talviSv = await getSummary("fi", 1256, "sv");
+  assertLongSummaryShape(talviSv, "Talvisota");
+  assert.equal(talviSv.out_lang, "sv");
+  if (MOCK.summary) {
+    assert.ok(talviSv.tldr.includes("[mock] (sv)"));
+  } else {
+    assert.equal(talviSv.mode, "llm");
+    const apiBase = (process.env.API_BASE || "").replace(/\/+$/, "");
+    const artRes = await fetch(`${apiBase}/api/article/fi/1256`);
+    assert.equal(artRes.status, 200);
+    const artJson = await artRes.json();
+    const normArt = normWs(artJson.text);
+    for (const f of talviSv.facts) {
+      assert.ok(
+        normArt.includes(normWs(f.source)),
+        `Translated sv summary top-level fact source for fi:1256 not found in original Finnish text: ${f.source}`
+      );
+    }
+  }
 });
 
 test("Simulated error mode (?mockError=1 / setMockConfig) rejects properly", { skip: !MOCK.stars }, async () => {

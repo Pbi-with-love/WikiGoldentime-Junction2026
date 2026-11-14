@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS3DRenderer, CSS3DObject } from "three/addons/renderers/CSS3DRenderer.js";
+import { t } from "./i18n.js";
 
 // Design tokens mirrored from CSS variables (--kaamos, --horizon, --snow, --birch, --lichen, --lingon, --frost)
 export const COLORS = {
@@ -383,7 +384,7 @@ export const SKY_CLUSTER_ROADS = [
   {
     id: "talvisota",
     label: "Talvisota",
-    sublabel: "Talvitie winter road",
+    sublabel: t("scene.talvitieSublabel"),
     pos: [13.5, 18.8, 11.4],
     query: { lang: "fi", page_id: 1256, mode: "topic" },
   },
@@ -391,14 +392,14 @@ export const SKY_CLUSTER_ROADS = [
     id: "sisallissota",
     idPage: 1150,
     label: "Suomen sisällissota",
-    sublabel: "Talvitie winter road",
+    sublabel: t("scene.talvitieSublabel"),
     pos: [-9.4, 18.4, 8.6],
     query: { lang: "fi", page_id: 1150, mode: "topic" },
   },
   {
     id: "autonomia",
     label: "Suomen suuriruhtinaskunta",
-    sublabel: "Talvitie winter road",
+    sublabel: t("scene.talvitieSublabel"),
     pos: [-22.0, -3.2, 16.0],
     query: { category: "Autonomian aika", mode: "topic" },
   },
@@ -622,14 +623,14 @@ export function createGalaxyScene({
   historyGuideGroup.add(new THREE.Line(spiralLineGeo, spiralLineMat));
 
   const HISTORY_GUIDE_ANCHORS = [
-    { label: "1155: Crusader era", year: 1155 },
-    { label: "1596: Cudgel War", year: 1596 },
-    { label: "1809: Diet of Porvoo", year: 1809 },
-    { label: "1905: General strike", year: 1905 },
-    { label: "1918: Civil War", year: 1918 },
-    { label: "1939: Winter War", year: 1939 },
-    { label: "1948: Cold War treaty", year: 1948 },
-    { label: "1995: EU era", year: 1995 },
+    { label: t("scene.era1155"), year: 1155 },
+    { label: t("scene.era1596"), year: 1596 },
+    { label: t("scene.era1809"), year: 1809 },
+    { label: t("scene.era1905"), year: 1905 },
+    { label: t("scene.era1918"), year: 1918 },
+    { label: t("scene.era1939"), year: 1939 },
+    { label: t("scene.era1948"), year: 1948 },
+    { label: t("scene.era1995"), year: 1995 },
   ].map((item) => {
     const u = yearToSpiralProgress(item.year);
     const [x, y, z] = spiralProgressToPoint(u, 1.2, 0.4);
@@ -682,7 +683,7 @@ export function createGalaxyScene({
     return { label: item.label, pos: new THREE.Vector3(gx, gy, gz) };
   });
   GEO_GUIDE_ANCHORS.push({
-    label: "Unlocated articles",
+    label: t("scene.unlocated"),
     pos: new THREE.Vector3(-24.5, -10.8, 0),
   });
 
@@ -1150,7 +1151,7 @@ export function createGalaxyScene({
           roadGapAnchors.push({
             eventIndex: i,
             gapYears,
-            label: `… ${gapYears} years …`,
+            label: t("scene.gapYears", { years: gapYears }),
             pos: new THREE.Vector3(0, -1.35, (gapZStart + gapZEnd) * 0.5),
           });
           currentZ = gapZEnd;
@@ -1721,7 +1722,7 @@ export function createGalaxyScene({
         ghost,
         index: gIdx,
         parentIndex: parentLayout.index,
-        label: `Section removed in ${ghost.removed_year}`,
+        label: t("scene.sectionRemoved", { year: ghost.removed_year }),
         pos: new THREE.Vector3(-5.7, -0.84, endZ),
       });
     }

@@ -41,8 +41,9 @@ class FakeCursor:
             self._rows = [(row,)] if row is not None else []
             return
         if s.startswith("INSERT INTO wikirag.answer_cache"):
-            q_hash, q_text, serialized, _model = params
+            q_hash, q_text, ui_val, serialized, _model = params
             self.store["cache"][q_hash] = serialized
+            self.store.setdefault("cache_ui", {})[q_hash] = ui_val
             self.store["cache_queries"].append(q_text)
             self.description = []
             self._rows = []
@@ -1164,3 +1165,136 @@ def test_a6_pinned_talvisota_1862876_on_live_3307():
             cur.close()
     finally:
         con.close()
+
+
+def test_ask_ui_hash_validation_miss_fallback_and_translation(monkeypatch):
+    q = "How did the Winter War end?"
+    plain_hash = hashlib.sha256(ask.normalize_question(q).encode("utf-8")).hexdigest()
+    assert ask.question_hash(q) == plain_hash
+    assert ask.question_hash(q, ui=None) == plain_hash
+    assert ask.question_hash(q, ui="") == plain_hash
+
+    sv_hash = ask.question_hash(q, ui="sv")
+    fi_hash = ask.question_hash(q, ui="fi")
+    en_hash = ask.question_hash(q, ui="en")
+    assert len({plain_hash, sv_hash, fi_hash, en_hash}) == 4
+
+    store = _sample_store(with_history=True)
+    ask._cache_table_ready = False
+    ask._inflight_jobs.clear()
+
+    embed_calls = {"n": 0}
+
+    def fake_embed(texts: list[str]) -> tuple[list[list[float]], int]:
+        embed_calls["n"] += 1
+        return [[0.1, 0.2, 0.3]], 5
+
+    scheduled: list[tuple[Any, tuple[Any, ...]]] = []
+    from fastapi import BackgroundTasks
+
+    monkeypatch.setattr(ask.summary, "_open_rag", lambda: FakeConnection(store))
+    monkeypatch.setattr(ask.rag_common, "embed", lambda texts, truncate=True: fake_embed(texts))
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, func, *args: scheduled.append((func, args)))
+
+    tc = TestClient(main.app)
+
+    # 1. Invalid ui -> 422
+    assert tc.get("/api/ask?q=test&ui=de").status_code == 422
+
+    # 2. Total miss with ui=sv and ui=fi returns localized pending prefix & out_lang=None
+    r_sv_pend = tc.get(f"/api/ask?q={q}&ui=sv")
+    r_fi_pend = tc.get(f"/api/ask?q={q}&ui=fi")
+    assert r_sv_pend.status_code == 200
+    assert r_fi_pend.status_code == 200
+    assert r_sv_pend.json()["pending"] is True
+    assert r_sv_pend.json()["out_lang"] is None
+    assert r_sv_pend.json()["answer"].startswith("Förbereder ett svar…")
+    assert r_fi_pend.json()["answer"].startswith("Valmistellaan vastausta…")
+    assert len(scheduled) == 2
+
+    # 3. When legacy default cache row exists, ?ui=sv miss returns default row with out_lang=None
+    #    without calling embed, and schedules 1 single-flight background job for sv_hash.
+    ask._inflight_jobs.clear()
+    scheduled.clear()
+    embed_before = embed_calls["n"]
+    legacy_default = {
+        "answer": "Cached English default answer [1].",
+        "facts": [],
+        "sources": [],
+        "top": {"lang": "fi", "page_id": 52097},
+        "history_available": True,
+        "pending": False,
+        "milestones": [],
+    }
+    store["cache"][plain_hash] = json.dumps(legacy_default)
+    r_fb1 = tc.get(f"/api/ask?q={q}&ui=sv")
+    r_fb2 = tc.get(f"/api/ask?q={q}&ui=sv")
+    assert r_fb1.status_code == 200
+    assert r_fb1.json()["pending"] is False
+    assert r_fb1.json()["out_lang"] is None
+    assert r_fb1.json()["answer"] == "Cached English default answer [1]."
+    assert r_fb2.status_code == 200
+    assert embed_calls["n"] == embed_before
+    assert len(scheduled) == 1
+    assert scheduled[0][1][1] == sv_hash
+    assert scheduled[0][1][2] == "sv"
+
+    # 4. build_and_cache_ask with ui="sv" uses translated system prompts, localized no-answer milestone text,
+    #    preserves verbatim Finnish source_sentence, and sets out_lang="sv".
+    client = _make_fake_llm_client(
+        [
+            {
+                "found": True,
+                "answer": "Vinterkriget slutade med Moskvafreden den 12 mars 1940 [1].",
+                "facts": [
+                    {
+                        "text": "Moskvafreden slöts 12 mars 1940",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.",
+                        "n": 1,
+                    },
+                    {
+                        "text": "Translated source should be dropped",
+                        "source_sentence": "Moskvafreden slöts den 12 mars 1940.",
+                        "n": 1,
+                    },
+                ],
+            },
+            "refusal",
+            {
+                "found": True,
+                "answer": "Fredsfördraget slöts 12 mars 1940.",
+                "facts": [
+                    {
+                        "text": "Fredsfördraget slöts 12 mars 1940",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan.",
+                        "n": 1,
+                    }
+                ],
+            },
+        ]
+    )
+    payload, stats = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client,
+        embed_fn=fake_embed,
+    )
+    assert payload["out_lang"] == "sv"
+    assert payload["answer"].startswith("Vinterkriget slutade")
+    assert len(payload["facts"]) == 1
+    assert payload["facts"][0]["source_sentence"] == "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940."
+    assert stats.current_facts_dropped == 1
+    assert client.recorded_calls[0]["system"] == ask.TRANSLATED_CURRENT_SYSTEM_PROMPTS["sv"]
+    assert client.recorded_calls[1]["system"] == ask.TRANSLATED_YEAR_SYSTEM_PROMPTS["sv"]
+    assert payload["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["sv"]
+    assert payload["milestones"][1]["answer"] == "Fredsfördraget slöts 12 mars 1940."
+    assert store["cache_ui"][sv_hash] == "sv"
+
+    # 5. Cache hit with ui=sv returns translated payload without scheduling work
+    scheduled.clear()
+    r_hit = tc.get(f"/api/ask?q={q}&ui=sv")
+    assert r_hit.status_code == 200
+    assert r_hit.json()["out_lang"] == "sv"
+    assert len(scheduled) == 0

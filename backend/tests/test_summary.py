@@ -462,13 +462,13 @@ class _FakeCursor:
             ]
             self._rows = [row] if row is not None else []
         elif "FROM wikirag.summary_cache" in s:
-            lang, pid, rev_id = params
-            cached = self._db["cache"].get((lang, int(pid), int(rev_id)))
+            lang, pid, rev_id, ui = params
+            cached = self._db["cache"].get((lang, int(pid), int(rev_id), str(ui)))
             self.description = [("json",)]
             self._rows = [(cached,)] if cached is not None else []
         elif s.startswith("INSERT INTO wikirag.summary_cache"):
-            lang, pid, rev_id, payload = params
-            self._db["cache"][(lang, int(pid), int(rev_id))] = payload
+            lang, pid, rev_id, ui, payload = params
+            self._db["cache"][(lang, int(pid), int(rev_id), str(ui))] = payload
             self._rows = []
         elif "FROM article WHERE page_id = ?" in s:
             (pid,) = params
@@ -597,7 +597,7 @@ def test_cache_miss_returns_extractive_and_singleflight_schedules_once(monkeypat
     assert d1["sections"][0]["history"]["war_years"] == []
     assert llm_called is False
     assert len(scheduled) == 1
-    assert scheduled[0][1][0] == ("fi", 1256, 23500447)
+    assert scheduled[0][1][0] == ("fi", 1256, 23500447, "")
 
     # SUMMARY_LLM=0 disables background job scheduling
     summary._inflight_jobs.clear()
@@ -606,14 +606,145 @@ def test_cache_miss_returns_extractive_and_singleflight_schedules_once(monkeypat
     r3 = client.get("/api/summary/fi/1256")
     assert r3.status_code == 200
     assert r3.json()["mode"] == "extractive"
+    assert r3.json()["out_lang"] == "fi"
     assert len(scheduled) == 0
 
     # Cache hit returns mode="llm" directly without scheduling background work
     cached_payload = {**d1, "mode": "llm", "tldr": "Cached LLM summary."}
-    db_state["cache"][("fi", 1256, 23500447)] = json.dumps(cached_payload)
+    db_state["cache"][("fi", 1256, 23500447, "")] = json.dumps(cached_payload)
     monkeypatch.setenv("SUMMARY_LLM", "1")
     r4 = client.get("/api/summary/fi/1256")
     assert r4.status_code == 200
     assert r4.json()["mode"] == "llm"
     assert r4.json()["tldr"] == "Cached LLM summary."
+    assert len(scheduled) == 0
+
+
+def test_ui_translation_cache_miss_fallback_validation_and_grounding(monkeypatch):
+    art_text = _make_long_article("Talvisota", num_sections=4)
+    lead_sentence = "Talvisota alkoi 30. marraskuuta 1939 ja päättyi 13. maaliskuuta 1940."
+    art_text_with_fact = art_text.replace("Johtopäätös 1", f"{lead_sentence} Johtopäätös 1", 1)
+    db_state = {
+        "articles": {
+            (
+                "fi",
+                1256,
+            ): (
+                "fi",
+                1256,
+                23500447,
+                "Q134949",
+                "Talvisota",
+                "https://fi.wikipedia.org/wiki/Talvisota",
+                art_text_with_fact,
+            )
+        },
+        "cache": {},
+        "svt_current": {},
+        "svt_first": {},
+        "svt_snaps": {},
+    }
+
+    monkeypatch.setattr(summary, "_open_rag", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_open_svt", lambda: _FakeConn(db_state))
+    monkeypatch.setattr(summary, "_cache_table_ready", False)
+    summary._inflight_jobs.clear()
+
+    scheduled: list[tuple] = []
+    monkeypatch.setenv("SUMMARY_LLM", "1")
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, fn, *args: scheduled.append((fn, args)))
+
+    client = TestClient(main.app)
+
+    # 1. Invalid ui language -> 422
+    assert client.get("/api/summary/fi/1256?ui=de").status_code == 422
+
+    # 2. ui matching article.lang uses '' cache row and schedules '' key
+    assert client.get("/api/summary/fi/1256?ui=fi").status_code == 200
+    assert len(scheduled) == 1
+    assert scheduled[0][1][0] == ("fi", 1256, 23500447, "")
+
+    # 3. Pre-existing legacy '' cache row (without out_lang) -> ?ui=sv miss returns default LLM with out_lang="fi"
+    #    and schedules 1 background job for "sv" (deduped across repeat calls).
+    summary._inflight_jobs.clear()
+    scheduled.clear()
+    legacy_fi_payload = {
+        "article": {"lang": "fi", "page_id": 1256, "title": "Talvisota"},
+        "mode": "llm",
+        "rev_id": 23500447,
+        "tldr": "Suomenkielinen tiivistelmä.",
+        "facts": [],
+        "sections": [],
+        "ghost_sections": [],
+    }
+    db_state["cache"][("fi", 1256, 23500447, "")] = json.dumps(legacy_fi_payload)
+    r_sv_miss_1 = client.get("/api/summary/fi/1256?ui=sv")
+    r_sv_miss_2 = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_sv_miss_1.status_code == 200
+    assert r_sv_miss_2.status_code == 200
+    d_sv_miss = r_sv_miss_1.json()
+    assert d_sv_miss["mode"] == "llm"
+    assert d_sv_miss["out_lang"] == "fi"
+    assert d_sv_miss["tldr"] == "Suomenkielinen tiivistelmä."
+    assert len(scheduled) == 1
+    assert scheduled[0][1][0] == ("fi", 1256, 23500447, "sv")
+
+    # 4. ui=en miss when neither '' nor 'en' is cached -> extractive with out_lang="fi"
+    del db_state["cache"][("fi", 1256, 23500447, "")]
+    scheduled.clear()
+    summary._inflight_jobs.clear()
+    r_en_miss = client.get("/api/summary/fi/1256?ui=en")
+    assert r_en_miss.status_code == 200
+    assert r_en_miss.json()["mode"] == "extractive"
+    assert r_en_miss.json()["out_lang"] == "fi"
+    assert len(scheduled) == 1
+    assert scheduled[0][1][0] == ("fi", 1256, 23500447, "en")
+
+    # 5. Building ui=sv LLM summary uses translated system prompt, preserves verbatim Finnish source,
+    #    drops translated source, and writes ('fi', 1256, 23500447, 'sv') without touching '' row.
+    recorded_calls: list[dict[str, Any]] = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            recorded_calls.append(kwargs)
+            user_content = kwargs["messages"][0]["content"]
+            if "<article_text" in user_content or user_content.startswith("Title: "):
+                payload = {
+                    "tldr": "Vinterkriget började den 30 november 1939.",
+                    "facts": [
+                        {"label": "Startdatum", "value": "30 november 1939", "source": lead_sentence},
+                        {"label": "Translated", "value": "Bad", "source": "Vinterkriget började den 30 november 1939."},
+                    ],
+                }
+            else:
+                payload = {"one_line": "Avsnitt på svenska.", "summary": "Två meningar på svenska.", "facts": []}
+            return type(
+                "Resp",
+                (),
+                {
+                    "stop_reason": "end_turn",
+                    "usage": type("U", (), {"input_tokens": 50, "output_tokens": 25})(),
+                    "content": [type("B", (), {"type": "text", "text": json.dumps(payload)})()],
+                },
+            )()
+
+    fake_client = type("Client", (), {"messages": FakeMessages()})()
+    built, stats, from_cache = summary.build_and_cache_llm_summary("fi", 1256, ui="sv", llm_client=fake_client)
+    assert from_cache is False
+    assert built["out_lang"] == "sv"
+    assert built["tldr"] == "Vinterkriget började den 30 november 1939."
+    assert len(built["facts"]) == 1
+    assert built["facts"][0]["label"] == "Startdatum"
+    assert built["facts"][0]["source"] == lead_sentence
+    assert stats.facts_dropped == 1
+    assert recorded_calls[0]["system"] == summary.TRANSLATED_SYSTEM_PROMPTS["sv"]
+    assert ("fi", 1256, 23500447, "sv") in db_state["cache"]
+    assert ("fi", 1256, 23500447, "") not in db_state["cache"]
+
+    # 6. Subsequent GET ?ui=sv hits cache directly
+    scheduled.clear()
+    r_sv_hit = client.get("/api/summary/fi/1256?ui=sv")
+    assert r_sv_hit.status_code == 200
+    assert r_sv_hit.json()["out_lang"] == "sv"
+    assert r_sv_hit.json()["mode"] == "llm"
     assert len(scheduled) == 0
