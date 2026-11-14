@@ -25,8 +25,10 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
   reverts 45,668, disputes 15,633, war_months 890, month_stats 371,512, global_month_stats 285; Talvisota
   unchanged (2143/328/88/7). 3307 CPU: `docker update --cpus 0` does NOT clear the cap (NanoCpus stays) ->
   set `--cpus 2` (= all cores). 3308 untouched (organizers' tm).
-  TODO after 013: summary_cache rows of fi articles built before the load have history null -> delete those
-  rows (fi, page now in wikihistory) so they rebuild; rebuild the 3 no-history ask questions; re-prewarm demo summaries.
+  Post-load DONE 15:40 UTC: deleted 4 stale summary_cache rows (fi 142/439/115530/714914, has_history false);
+  rebuilt ask [32]/[34]/[39] (now history, ok=3, 37 LLM calls; their top article still != expected: retrieval
+  miss, unrelated to history); re-prewarmed fi 1256 (14 sec/5 ghosts), 1150 (11/4), 440 (6/1), 0 failed calls.
+  NOTE: use JSON_EXTRACT (not JSON_VALUE) for JSON booleans in MariaDB.
 - (old) Dataset M load started 14:45 UTC: tmux `loadM` on VPS, organizers' load.py with our venv,
   `DB_PORT=3307 nice -n 19 ... load.py --list data/articles-all.tsv` (19,754 articles, 50 already loaded),
   log ~/wikimemory/loadM.log (START/LOAD_EXIT/END lines); 3307 capped `--cpus 1.5`, the tmux chain resets
