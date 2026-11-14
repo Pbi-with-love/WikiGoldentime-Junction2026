@@ -105,9 +105,10 @@ Hybrid was slower and no better, so we do not use it. One question got worse wit
 (Ryti–Ribbentrop-sopimus).
 
 **Cross-language compare.** `GET /api/compare/fi/{page_id}` runs on request: for each Finnish section
-it takes the closest chunk of the Swedish and English sibling (same `wikidata_id`) with
-`VEC_DISTANCE_COSINE` between the two articles' chunks. A match needs distance ≤ 0.35. On 132
-hand-labelled pairs that gives precision 0.908 and recall 0.747. Talvisota takes 17 ms.
+it pairs sections of the Swedish and English sibling (same `wikidata_id`) by
+`VEC_DISTANCE_COSINE` between the two articles' chunks, keeping only mutual best section pairs.
+A match needs a score of 0.45. On 130 hand-labelled pairs that gives precision 0.984 and recall
+0.782. Warm compare takes at most 24 ms.
 
 **System versioning (SVT).** `wikihistory.article` is `WITH SYSTEM VERSIONING`. Its invisible
 `row_start`/`row_end` columns hold the real Wikipedia edit times. We loaded dataset M (19,742
@@ -149,9 +150,8 @@ the real treaty-date edit was placed one period late. Now a milestone needs a ch
 ## Known limits
 
 - Change detection uses numbers only. Edits that change only names or wording are missed.
-- Compare recall is 0.747: about 1 in 4 real matches is missed (e.g. Talvisota *Joukot* vs Swedish
-  *Styrkeförhållanden*, 0.381). Some matches are only cosmetic (the fi notes section "Huomautuksia"
-  matches an English notes chunk), and a match can point to a weak passage.
+- Compare recall is 0.782: about 1 in 5 real matches is missed. A match can still point to a
+  weak passage.
 - History exists only for Finnish (dataset M). Swedish and English summaries show the **Finnish**
   edit history next to them. 12 listed articles were missing from the dumps.
 - Some demo questions miss: 32, 34 and 39 retrieve the wrong top article, and [38] finds no answer at all.
