@@ -1063,6 +1063,50 @@ export function saveViewState(state, storage = getDefaultSessionStorage()) {
   }
 }
 
+export function peekViewState(storage = getDefaultSessionStorage()) {
+  try {
+    const raw = storage?.getItem(VIEW_STATE_STORAGE_KEY);
+    return raw ? normalizeViewState(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Spec 033: a language switch reloads the page. Carry the language-independent boot data (stars, global
+// timeline, fi compare) across it in Cache Storage: written just before the reload, taken once, deleted.
+const RELOAD_CACHE = "wm-reload-restore";
+const RELOAD_CACHE_URL = "/__reload-restore";
+const RELOAD_CACHE_MAX_AGE_MS = 60_000;
+
+export async function saveReloadCache(data) {
+  try {
+    if (typeof caches === "undefined" || !data?.stars?.length) return;
+    const cache = await caches.open(RELOAD_CACHE);
+    await cache.put(
+      RELOAD_CACHE_URL,
+      new Response(JSON.stringify({ at: Date.now(), ...data }), {
+        headers: { "content-type": "application/json" },
+      })
+    );
+  } catch {
+    // Cache Storage unavailable: the reload just refetches.
+  }
+}
+
+export async function takeReloadCache() {
+  try {
+    if (typeof caches === "undefined" || !(await caches.has(RELOAD_CACHE))) return null;
+    const hit = await (await caches.open(RELOAD_CACHE)).match(RELOAD_CACHE_URL);
+    await caches.delete(RELOAD_CACHE);
+    if (!hit) return null;
+    const data = await hit.json();
+    const fresh = Date.now() - data.at < RELOAD_CACHE_MAX_AGE_MS;
+    return fresh && Array.isArray(data.stars) && data.stars.length && data.timeline ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function consumeViewState(storage = getDefaultSessionStorage()) {
   if (!storage) return null;
   let raw = null;

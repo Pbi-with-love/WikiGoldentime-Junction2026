@@ -17,6 +17,9 @@ import {
   normalizeViewState,
   saveViewState,
   consumeViewState,
+  peekViewState,
+  saveReloadCache,
+  takeReloadCache,
 } from "./i18n.js";
 import { getAskProvenance } from "./ui.js";
 
@@ -510,5 +513,73 @@ test("031 normalizeViewState / saveViewState / consumeViewState handle cardRef r
     assert.ok(res !== null);
     assert.equal(res.cardIndex, 4);
     assert.equal(res.cardRef, null, `Expected bad cardRef ${JSON.stringify(bad)} to be dropped`);
+  }
+});
+
+function fakeStorage() {
+  const m = new Map();
+  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+}
+
+test("peekViewState reads without consuming", () => {
+  const st = fakeStorage();
+  saveViewState({ view: "summary", article: { lang: "fi", page_id: 1256 }, year: 2026 }, st);
+  assert.equal(peekViewState(st).article.page_id, 1256);
+  assert.equal(peekViewState(st).article.page_id, 1256);
+  assert.equal(consumeViewState(st).article.page_id, 1256);
+  assert.equal(peekViewState(st), null);
+});
+
+function withFakeCaches(fn) {
+  const store = new Map();
+  const prev = globalThis.caches;
+  globalThis.caches = {
+    has: async (n) => store.has(n),
+    delete: async (n) => store.delete(n),
+    open: async (n) => {
+      if (!store.has(n)) store.set(n, new Map());
+      const c = store.get(n);
+      return { put: async (u, r) => c.set(u, r), match: async (u) => c.get(u) };
+    },
+  };
+  return fn(store).finally(() => {
+    globalThis.caches = prev;
+  });
+}
+
+test("reload cache: saved once, taken once, deleted", () =>
+  withFakeCaches(async (store) => {
+    await saveReloadCache({ stars: [{ page_id: 1 }], timeline: { months: [] }, compare: { key: "fi:1", data: { a: 1 } } });
+    const got = await takeReloadCache();
+    assert.equal(got.stars[0].page_id, 1);
+    assert.equal(got.compare.key, "fi:1");
+    assert.equal(store.size, 0);
+    assert.equal(await takeReloadCache(), null);
+  }));
+
+test("reload cache: empty stars are not saved, stale or broken entries fall back to null", () =>
+  withFakeCaches(async (store) => {
+    await saveReloadCache({ stars: [], timeline: { months: [] } });
+    assert.equal(store.size, 0);
+    const realNow = Date.now;
+    await saveReloadCache({ stars: [{ page_id: 1 }], timeline: { months: [] } });
+    Date.now = () => realNow() + 61_000;
+    try {
+      assert.equal(await takeReloadCache(), null);
+    } finally {
+      Date.now = realNow;
+    }
+    store.set("wm-reload-restore", new Map([["/__reload-restore", { json: async () => { throw new Error("bad"); } }]]));
+    assert.equal(await takeReloadCache(), null);
+  }));
+
+test("reload cache: no Cache Storage means null, no throw", async () => {
+  const prev = globalThis.caches;
+  delete globalThis.caches;
+  try {
+    await saveReloadCache({ stars: [{ page_id: 1 }], timeline: {} });
+    assert.equal(await takeReloadCache(), null);
+  } finally {
+    if (prev) globalThis.caches = prev;
   }
 });
