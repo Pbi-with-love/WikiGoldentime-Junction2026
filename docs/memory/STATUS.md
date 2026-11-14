@@ -35,7 +35,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 004-mock-flags | done | `MOCK` object (11 keys) + REAL/API_BASE in contract test; npm test 11/11 (orchestrator rerun), build OK, REAL=stars vs closed port fails as expected, Playwright smoke 0 errors (`artifacts/screenshots/004-mock-flags/`) |
 - 005-history-stats | done | history_stats 50 / month_stats 5,331 / global_month_stats 279 rows, edits sum 31,848 (orchestrator recount); Talvisota 2143 versions, 328 reverts, 88 disputes, 7 war months = organizers' numbers; 6 unit tests; run 1.4 s, deterministic CHECKSUM |
 - 006-api-core | done | FastAPI on VPS 127.0.0.1:8002 (tmux api); orchestrator rerun: REAL=stars,search,article,timeline,asof,diff contract 10 pass/0 fail/1 skip (error-mode), mock 11/11; curl via tunnel: stars 0.32 s gz 1.7 MB, search 0.46 s, article 0.16 s, timeline 0.18 s, asof 0.18 s, diff 0.17 s; 6 MOCK flags now false; vite.config.js proxies /api to :8002; contract edits: top-2 gap <0.02, asof date 2026-10-01 |
-- 007-fetch-images | spec ready (adds license, artist columns) |
+- 007-fetch-images | done | article_image 15,355 rows (en 3,425 / fi 8,723 / sv 3,207 = 52.1% of 29,460; orchestrator recount), Commons-only, utm stripped, thumb.wikimedia.org + upload.wikimedia.org; 28 min; resume = 0 requests; /api/article/fi/1256 now returns real thumb_url. TODO: expose license/artist in API + UI credit; User-Agent contact is still a placeholder |
 - 008-chunks | spec ready (embed on VPS overnight, tmux embed, nice) |
 - 009-api-summary | in progress (Hydrogen) |
 - 010-api-ask | spec ready (hero demo, Way A) |
