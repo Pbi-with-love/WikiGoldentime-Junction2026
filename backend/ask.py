@@ -99,13 +99,14 @@ TRANSLATE_SCHEMA = summary.TRANSLATE_SCHEMA
 TRANSLATE_SYSTEM_PROMPT = summary.TRANSLATE_SYSTEM_PROMPT
 
 _QLANG_SV = frozenset(
-    {"hur", "vad", "när", "vem", "varför", "vilken", "vilka", "slutade", "och", "är", "var", "det", "som"}
+    {"hur", "vad", "när", "vem", "varför", "vilken", "vilket", "vilka", "slutade", "och", "är", "var", "det", "som"}
 )
 _QLANG_FI = frozenset(
-    {"miten", "mikä", "mitä", "milloin", "kuka", "miksi", "missä", "kuinka", "oli", "ja", "päättyi"}
+    {"miten", "mikä", "mitä", "milloin", "kuka", "ketkä", "miksi", "missä", "kuinka", "oli", "ja", "päättyi"}
 )
+_QLANG_FI_EXTRA = frozenset({"vuonna", "suomen"})
 _QLANG_EN = frozenset(
-    {"how", "what", "when", "who", "why", "where", "which", "did", "does", "was", "were", "the", "is"}
+    {"how", "what", "when", "who", "whom", "whose", "why", "where", "which", "did", "does", "was", "were", "the", "is", "are"}
 )
 _WORD_TOKEN_RE = re.compile(r"\w+")
 
@@ -197,6 +198,36 @@ _cache_table_ready = False
 
 _inflight_lock = threading.Lock()
 _inflight_jobs: set[str] = set()
+_inflight_progress: dict[str, dict[str, Any]] = {}
+
+
+def _set_inflight_progress(
+    q_hash: str,
+    stage: str,
+    years_done: int = 0,
+    years_total: int = 0,
+) -> None:
+    with _inflight_lock:
+        _inflight_progress[q_hash] = {
+            "stage": stage,
+            "years_done": int(years_done),
+            "years_total": int(years_total),
+        }
+
+
+def _get_inflight_progress(q_hash: str, check_hash: str | None = None) -> dict[str, Any] | None:
+    with _inflight_lock:
+        active = (q_hash in _inflight_jobs) or (check_hash is not None and check_hash in _inflight_jobs)
+        if not active:
+            _inflight_progress.pop(q_hash, None)
+            return None
+        prog = _inflight_progress.get(q_hash)
+        return dict(prog) if prog is not None else None
+
+
+def _clear_inflight_progress(q_hash: str) -> None:
+    with _inflight_lock:
+        _inflight_progress.pop(q_hash, None)
 
 
 @dataclass
@@ -225,6 +256,8 @@ class AskBuildStats:
     history_facts_kept: int = 0
     history_facts_dropped: int = 0
     failed_calls: int = 0
+    guard_retries: int = 0
+    guard_fallbacks: int = 0
     translate_strings: int = 0
     translate_fallbacks: int = 0
     input_tokens: int = 0
@@ -1040,17 +1073,69 @@ def fetch_history_snapshots(
     return snapshots, sql_mode
 
 
-def _format_current_user_message(q: str, passages: list[dict[str, Any]]) -> str:
+def _language_directive(expected_lang: str | None) -> str:
+    if not expected_lang or expected_lang not in summary.UI_LANGUAGE_NAMES:
+        return ""
+    lang_name = summary.UI_LANGUAGE_NAMES[expected_lang]
+    return f"Target language: {lang_name} ({expected_lang}). "
+
+
+def _retry_language_instruction(expected_lang: str, reasons: list[tuple[str, str]]) -> str:
+    lang_name = summary.UI_LANGUAGE_NAMES[expected_lang]
+    reason_summary = "; ".join(f"{field}={reason}" for field, reason in reasons[:3])
+    return (
+        f"CRITICAL RETRY ({reason_summary}): Your previous response was in the wrong language. "
+        f"Rewrite `answer` and every `facts[].text` strictly in {lang_name} ({expected_lang}) ONLY — "
+        f"do NOT write in Finnish or any other source language unless the target language is Finnish. "
+        "Keep every `source_sentence` verbatim in its original source language."
+    )
+
+
+def _find_ask_guard_issues(
+    answer: str,
+    facts: list[dict[str, Any]],
+    expected_lang: str | None,
+) -> list[tuple[str, str]]:
+    """Check generated answer and facts[].text (never source_sentence) via summary.check_output_guard."""
+    if not expected_lang:
+        return []
+    issues: list[tuple[str, str]] = []
+    ans_reason = summary.check_output_guard(answer, expected_lang)
+    if ans_reason is not None:
+        issues.append(("answer", ans_reason))
+    for idx, fact in enumerate(facts):
+        txt = str(fact.get("text", ""))
+        f_reason = summary.check_output_guard(txt, expected_lang)
+        if f_reason is not None:
+            issues.append((f"fact[{idx}]", f_reason))
+    return issues
+
+
+def _format_current_user_message(
+    q: str,
+    passages: list[dict[str, Any]],
+    expected_lang: str | None = None,
+    retry_instruction: str | None = None,
+) -> str:
     blocks = []
     for p in passages:
         sec_attr = f' section="{p["section"]}"' if p["section"] else ""
         blocks.append(f'<passage n="{p["n"]}" title="{p["title"]}"{sec_attr}>\n{p["body"]}\n</passage>')
-    return (
-        f"Question: {q}\n\n<passages>\n"
+    lang_line = _language_directive(expected_lang)
+    lang_tail = (
+        f"Write `answer` and every `facts[].text` strictly in {summary.UI_LANGUAGE_NAMES[expected_lang]} ({expected_lang})"
+        if expected_lang in summary.UI_LANGUAGE_NAMES
+        else f"write `answer` and `facts[].text` in the same language as the Question (`{q}`)"
+    )
+    msg = (
+        f"Question: {q}\n{lang_line}\n<passages>\n"
         + "\n\n".join(blocks)
-        + f"\n</passages>\n\nRemember: write `answer` and `facts[].text` in the same language as the Question (`{q}`), "
+        + f"\n</passages>\n\nRemember: {lang_tail}, "
         "while keeping each `source_sentence` verbatim in its passage's original language."
     )
+    if retry_instruction:
+        msg = f"{msg}\n\n{retry_instruction}"
+    return msg
 
 
 def _format_year_user_message(
@@ -1058,8 +1143,12 @@ def _format_year_user_message(
     year: int,
     context_text: str,
     prev_facts: list[dict[str, Any]],
+    expected_lang: str | None = None,
+    retry_instruction: str | None = None,
 ) -> str:
     parts = [f"Question: {q}", f"Revision year: {year}"]
+    if expected_lang in summary.UI_LANGUAGE_NAMES:
+        parts.append(f"Target language: {summary.UI_LANGUAGE_NAMES[expected_lang]} ({expected_lang})")
     if prev_facts:
         prev_json = json.dumps(
             [{"text": f["text"]} for f in prev_facts],
@@ -1072,11 +1161,18 @@ def _format_year_user_message(
             "If <article_context> still explicitly supports a previous fact, return its `text` unchanged."
         )
     parts.append(f"<article_context>\n{context_text}\n</article_context>")
+    lang_tail = (
+        f"strictly in {summary.UI_LANGUAGE_NAMES[expected_lang]} ({expected_lang})"
+        if expected_lang in summary.UI_LANGUAGE_NAMES
+        else f"in the EXACT SAME LANGUAGE as the Question (`{q}`)"
+    )
     reminder = (
-        f"Reminder: write `answer` and every `facts[].text` in the EXACT SAME LANGUAGE as the Question (`{q}`); "
+        f"Reminder: write `answer` and every `facts[].text` {lang_tail}; "
         "only `source_sentence` stays verbatim from <article_context>."
     )
     parts.append(reminder)
+    if retry_instruction:
+        parts.append(retry_instruction)
     return "\n\n".join(parts)
 
 
@@ -1086,39 +1182,64 @@ def _run_current_llm(
     q: str,
     retrieval: dict[str, Any],
     stats: AskBuildStats,
+    expected_lang: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], bool]:
-    user_msg = _format_current_user_message(q, retrieval["passages"])
-    parsed, in_t, out_t = summary._call_llm_json(
-        client,
-        model,
-        ASK_SCHEMA,
-        user_msg,
-        system_prompt=CURRENT_SYSTEM_PROMPT,
-    )
-    stats.total_llm_calls += 1
-    stats.input_tokens += in_t
-    stats.output_tokens += out_t
+    def _attempt(retry_instruction: str | None = None) -> tuple[str, list[dict[str, Any]], bool, int, int, bool]:
+        user_msg = _format_current_user_message(
+            q,
+            retrieval["passages"],
+            expected_lang=expected_lang,
+            retry_instruction=retry_instruction,
+        )
+        parsed, in_t, out_t = summary._call_llm_json(
+            client,
+            model,
+            ASK_SCHEMA,
+            user_msg,
+            system_prompt=CURRENT_SYSTEM_PROMPT,
+        )
+        stats.total_llm_calls += 1
+        stats.input_tokens += in_t
+        stats.output_tokens += out_t
+        if parsed is None:
+            return "", [], False, 0, 0, False
+        ans = str(parsed.get("answer", "")).strip()
+        if not ans:
+            return "", [], False, 0, 0, False
+        raw_found = bool(parsed.get("found"))
+        facts_kept, kept_n, dropped_n = filter_grounded_ask_facts(
+            parsed.get("facts"),
+            retrieval["text_by_n"],
+            retrieval["url_by_n"],
+        )
+        if raw_found and kept_n == 0 and parsed.get("facts"):
+            logger.warning("All current answer facts dropped by grounding check for q_hash=%s", stats.q_hash)
+        return ans, facts_kept, True, kept_n, dropped_n, raw_found
 
-    if parsed is None:
+    answer, facts, ok, kept_n, dropped_n, raw_found = _attempt()
+    if not ok:
         stats.failed_calls += 1
         return "", [], False
 
-    answer = str(parsed.get("answer", "")).strip()
-    if not answer:
-        stats.failed_calls += 1
-        return "", [], False
+    issues = _find_ask_guard_issues(answer, facts, expected_lang)
+    if issues and expected_lang:
+        stats.guard_retries += 1
+        logger.warning(
+            "Ask output guard retrying current answer for q_hash=%s expected=%s issues=%s",
+            stats.q_hash[:12],
+            expected_lang,
+            issues,
+        )
+        r_answer, r_facts, r_ok, r_kept, r_dropped, r_found = _attempt(
+            _retry_language_instruction(expected_lang, issues)
+        )
+        if not r_ok:
+            stats.failed_calls += 1
+        elif not (r_found and r_kept == 0 and kept_n > 0):
+            answer, facts, kept_n, dropped_n = r_answer, r_facts, r_kept, r_dropped
 
-    facts, kept_n, dropped_n = filter_grounded_ask_facts(
-        parsed.get("facts"),
-        retrieval["text_by_n"],
-        retrieval["url_by_n"],
-    )
     stats.current_facts_kept += kept_n
     stats.current_facts_dropped += dropped_n
-
-    if bool(parsed.get("found")) and kept_n == 0 and parsed.get("facts"):
-        logger.warning("All current answer facts dropped by grounding check for q_hash=%s", stats.q_hash)
-
     return answer, facts, True
 
 
@@ -1129,6 +1250,8 @@ def _run_history_llms(
     snapshots: list[dict[str, Any]],
     max_llm_calls: int,
     stats: AskBuildStats,
+    expected_lang: str | None = None,
+    progress_hash: str | None = None,
 ) -> list[dict[str, Any]]:
     stats.unique_contexts = len(
         {
@@ -1139,9 +1262,12 @@ def _run_history_llms(
     )
     call_indices = set(select_llm_year_indices(snapshots, max_llm_calls))
     stats.history_llm_calls = len(call_indices)
+    if progress_hash:
+        _set_inflight_progress(progress_hash, "history", years_done=0, years_total=len(call_indices))
 
     yearly_entries: list[dict[str, Any]] = []
     prev_result: dict[str, Any] | None = None
+    done_calls = 0
 
     for idx, snap in enumerate(snapshots):
         if idx not in call_indices and prev_result is not None:
@@ -1157,44 +1283,75 @@ def _run_history_llms(
             continue
 
         prev_facts = prev_result["facts"] if prev_result is not None else []
-        user_msg = _format_year_user_message(q, snap["year"], snap["context_text"], prev_facts)
-        parsed, in_t, out_t = summary._call_llm_json(
-            client,
-            model,
-            ASK_SCHEMA,
-            user_msg,
-            system_prompt=YEAR_SYSTEM_PROMPT,
-        )
-        stats.total_llm_calls += 1
-        stats.input_tokens += in_t
-        stats.output_tokens += out_t
 
-        if parsed is None:
-            stats.failed_calls += 1
-            found = False
-            answer = NO_ANSWER_MILESTONE_TEXT
-            facts: list[dict[str, Any]] = []
-        else:
+        def _year_attempt(retry_instruction: str | None = None) -> tuple[bool, str, list[dict[str, Any]], int, int, bool]:
+            user_msg = _format_year_user_message(
+                q,
+                snap["year"],
+                snap["context_text"],
+                prev_facts,
+                expected_lang=expected_lang,
+                retry_instruction=retry_instruction,
+            )
+            parsed, in_t, out_t = summary._call_llm_json(
+                client,
+                model,
+                ASK_SCHEMA,
+                user_msg,
+                system_prompt=YEAR_SYSTEM_PROMPT,
+            )
+            stats.total_llm_calls += 1
+            stats.input_tokens += in_t
+            stats.output_tokens += out_t
+
+            if parsed is None:
+                return False, NO_ANSWER_MILESTONE_TEXT, [], 0, 0, False
+
             raw_found = bool(parsed.get("found"))
             raw_answer = str(parsed.get("answer", "")).strip()
-            facts, kept_n, dropped_n = filter_grounded_ask_facts(
+            f_kept, k_n, d_n = filter_grounded_ask_facts(
                 [{**f, "n": 1} for f in (parsed.get("facts") or []) if isinstance(f, dict)],
                 {1: snap["context_text"]},
                 {1: snap["url"]},
             )
-            stats.history_facts_kept += kept_n
-            stats.history_facts_dropped += dropped_n
+            eff_found = False if (raw_found and k_n == 0) else raw_found
+            if eff_found:
+                eff_answer = raw_answer or "; ".join(f["text"] for f in f_kept)
+                return True, eff_answer, f_kept, k_n, d_n, True
+            return False, NO_ANSWER_MILESTONE_TEXT, [], k_n, d_n, True
 
-            if raw_found and kept_n == 0:
-                found = False
-            else:
-                found = raw_found
+        found, answer, facts, kept_n, dropped_n, call_ok = _year_attempt()
+        if not call_ok:
+            stats.failed_calls += 1
+        elif found and expected_lang:
+            issues = _find_ask_guard_issues(answer, facts, expected_lang)
+            if issues:
+                stats.guard_retries += 1
+                logger.warning(
+                    "Ask output guard retrying year=%s for q_hash=%s expected=%s issues=%s",
+                    snap["year"],
+                    stats.q_hash[:12],
+                    expected_lang,
+                    issues,
+                )
+                r_found, r_answer, r_facts, r_kept, r_dropped, r_ok = _year_attempt(
+                    _retry_language_instruction(expected_lang, issues)
+                )
+                if not r_ok:
+                    stats.failed_calls += 1
+                elif r_found or not found:
+                    found, answer, facts, kept_n, dropped_n = r_found, r_answer, r_facts, r_kept, r_dropped
 
-            if found:
-                answer = raw_answer or "; ".join(f["text"] for f in facts)
-            else:
-                answer = NO_ANSWER_MILESTONE_TEXT
-                facts = []
+        stats.history_facts_kept += kept_n
+        stats.history_facts_dropped += dropped_n
+        done_calls += 1
+        if progress_hash:
+            _set_inflight_progress(
+                progress_hash,
+                "history",
+                years_done=done_calls,
+                years_total=len(call_indices),
+            )
 
         entry = {
             **snap,
@@ -1210,17 +1367,40 @@ def _run_history_llms(
 
 
 def question_lang(q: str) -> str | None:
-    """Detect fi/sv/en question language from fixed word lists, or None if undetermined."""
-    # shortcut: word-list language guess for fi/sv/en questions only; None => translate (1 call), upgrade to a stored q_lang if mis-guesses show up
+    """Detect fi/sv/en question language from question words and stopwords, or None if ambiguous."""
+    # Default answer_cache rows (ui='') use question_lang(q) rather than the client's ?ui= hint so
+    # the shared default row stays in the language of the question itself.
     lowered = unicodedata.normalize("NFC", q).lower()
     tokens = _WORD_TOKEN_RE.findall(lowered)
-    if "å" in lowered or any(tok in _QLANG_SV for tok in tokens):
-        return "sv"
-    if any(tok in _QLANG_FI or (len(tok) > 4 and tok.endswith(("ko", "kö"))) for tok in tokens):
-        return "fi"
-    if any(tok in _QLANG_EN for tok in tokens):
-        return "en"
-    return None
+    if not tokens:
+        return None
+
+    scores: dict[str, int] = {"sv": 0, "fi": 0, "en": 0}
+    for tok in tokens:
+        if tok in _QLANG_SV:
+            scores["sv"] += 2
+        if tok in _QLANG_FI or (len(tok) > 4 and tok.endswith(("ko", "kö"))):
+            scores["fi"] += 2
+        if tok in _QLANG_EN:
+            scores["en"] += 2
+
+    if "å" in lowered:
+        scores["sv"] += 1
+
+    if len(tokens) >= 2:
+        for tok in tokens:
+            if tok in summary._LANG_STOPWORDS["sv"]:
+                scores["sv"] += 1
+            if tok in summary._LANG_STOPWORDS["fi"] or tok in _QLANG_FI_EXTRA:
+                scores["fi"] += 1
+            if tok in summary._LANG_STOPWORDS["en"]:
+                scores["en"] += 1
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    best_lang, best_score = ranked[0]
+    if best_score <= 0 or best_score == ranked[1][1]:
+        return None
+    return best_lang
 
 
 def _all_translatable_strings(default: dict[str, Any]) -> list[str]:
@@ -1317,7 +1497,113 @@ def _translate_strings(
     return mapping
 
 
-def _build_pending_payload(q: str, retrieval: dict[str, Any], ui: str | None = None) -> dict[str, Any]:
+def _collect_guard_flagged_strings(
+    answer: str,
+    facts: list[dict[str, Any]],
+    milestones: list[dict[str, Any]],
+    expected_lang: str,
+) -> list[str]:
+    """Collect unique generated strings (never source_sentence) failing check_output_guard."""
+    flagged: list[str] = []
+    if summary.check_output_guard(answer, expected_lang) is not None:
+        flagged.append(answer)
+    for fact in facts:
+        txt = str(fact.get("text", ""))
+        if txt and summary.check_output_guard(txt, expected_lang) is not None:
+            flagged.append(txt)
+    for ms in milestones:
+        if not ms.get("found"):
+            continue
+        ms_ans = str(ms.get("answer", ""))
+        if ms_ans and summary.check_output_guard(ms_ans, expected_lang) is not None:
+            flagged.append(ms_ans)
+        for fact in ms.get("facts") or []:
+            txt = str(fact.get("text", ""))
+            if txt and summary.check_output_guard(txt, expected_lang) is not None:
+                flagged.append(txt)
+    return list(dict.fromkeys(flagged))
+
+
+def _apply_guard_translator_fallback(
+    client: Any,
+    model: str,
+    answer: str,
+    current_facts: list[dict[str, Any]],
+    milestones_out: list[dict[str, Any]],
+    expected_lang: str | None,
+    stats: AskBuildStats,
+) -> str:
+    """If any generated strings still fail check_output_guard after retry, translate them in one call."""
+    if not expected_lang or expected_lang not in summary.UI_LANGUAGE_NAMES:
+        return answer
+    bad_strings = _collect_guard_flagged_strings(answer, current_facts, milestones_out, expected_lang)
+    if not bad_strings:
+        return answer
+
+    logger.warning(
+        "Ask output guard falling back to translator for q_hash=%s expected=%s flagged=%d",
+        stats.q_hash[:12],
+        expected_lang,
+        len(bad_strings),
+    )
+    mapping, fallbacks, in_t, out_t, ok = summary.translate_strings(
+        client,
+        model,
+        bad_strings,
+        expected_lang,
+        max_tokens=4000,
+    )
+    stats.total_llm_calls += 1
+    stats.input_tokens += in_t
+    stats.output_tokens += out_t
+    if not ok:
+        stats.failed_calls += 1
+        logger.warning(
+            "Ask output guard translator fallback failed for q_hash=%s expected=%s",
+            stats.q_hash[:12],
+            expected_lang,
+        )
+        return answer
+
+    replaced = 0
+    if answer in mapping:
+        answer = mapping[answer]
+        replaced += 1
+    for fact in current_facts:
+        txt = fact.get("text")
+        if isinstance(txt, str) and txt in mapping:
+            fact["text"] = mapping[txt]
+            replaced += 1
+    for ms in milestones_out:
+        if not ms.get("found"):
+            continue
+        ms_ans = ms.get("answer")
+        if isinstance(ms_ans, str) and ms_ans in mapping:
+            ms["answer"] = mapping[ms_ans]
+            replaced += 1
+        for fact in ms.get("facts") or []:
+            txt = fact.get("text")
+            if isinstance(txt, str) and txt in mapping:
+                fact["text"] = mapping[txt]
+                replaced += 1
+    stats.guard_fallbacks += replaced
+    if fallbacks > 0:
+        logger.warning(
+            "Ask output guard translator partial fallback q_hash=%s expected=%s fallbacks=%d/%d",
+            stats.q_hash[:12],
+            expected_lang,
+            fallbacks,
+            len(bad_strings),
+        )
+    return answer
+
+
+def _build_pending_payload(
+    q: str,
+    retrieval: dict[str, Any],
+    ui: str | None = None,
+    progress: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     snippet = retrieval["first_sentence"]
     ui_clean = summary.normalize_ui(ui)
     prefix = PENDING_PREFIX_BY_UI[ui_clean or "en"]
@@ -1329,6 +1615,7 @@ def _build_pending_payload(q: str, retrieval: dict[str, Any], ui: str | None = N
         "history_available": bool(retrieval["history_available"]),
         "pending": True,
         "out_lang": None,
+        "progress": progress,
         "milestones": [],
     }
 
@@ -1515,38 +1802,56 @@ def build_and_cache_ask(
         )
         return payload, stats
 
+    expected_lang = question_lang(cleaned_q)
     client = llm_client if llm_client is not None else summary._default_anthropic_client()
-    answer, current_facts, current_ok = _run_current_llm(
-        client,
-        resolved_model,
-        cleaned_q,
-        retrieval,
-        stats,
-    )
-    if not current_ok:
-        stats.elapsed_seconds = round(time.monotonic() - t0, 3)
-        raise RuntimeError(f"Current LLM call failed for question {cleaned_q!r}")
+    _set_inflight_progress(q_hash, "preparing", years_done=0, years_total=0)
+    try:
+        answer, current_facts, current_ok = _run_current_llm(
+            client,
+            resolved_model,
+            cleaned_q,
+            retrieval,
+            stats,
+            expected_lang=expected_lang,
+        )
+        if not current_ok:
+            stats.elapsed_seconds = round(time.monotonic() - t0, 3)
+            raise RuntimeError(f"Current LLM call failed for question {cleaned_q!r}")
 
-    milestones_out: list[dict[str, Any]] = []
-    if retrieval["history_available"] and snapshots:
-        yearly_entries = _run_history_llms(
+        milestones_out: list[dict[str, Any]] = []
+        if retrieval["history_available"] and snapshots:
+            yearly_entries = _run_history_llms(
+                client=client,
+                model=resolved_model,
+                q=cleaned_q,
+                snapshots=snapshots,
+                max_llm_calls=resolved_max_calls,
+                stats=stats,
+                expected_lang=expected_lang,
+                progress_hash=q_hash,
+            )
+            called_results = [e for e in yearly_entries if e.get("called")]
+            milestones_out = _build_milestones_with_db(
+                snapshots=snapshots,
+                called_results=called_results,
+                page_id=top_obj["page_id"],
+                lang=top_obj["lang"],
+                rag_opener=open_rag,
+                stats=stats,
+            )
+        stats.milestones = len(milestones_out)
+
+        answer = _apply_guard_translator_fallback(
             client=client,
             model=resolved_model,
-            q=cleaned_q,
-            snapshots=snapshots,
-            max_llm_calls=resolved_max_calls,
+            answer=answer,
+            current_facts=current_facts,
+            milestones_out=milestones_out,
+            expected_lang=expected_lang,
             stats=stats,
         )
-        called_results = [e for e in yearly_entries if e.get("called")]
-        milestones_out = _build_milestones_with_db(
-            snapshots=snapshots,
-            called_results=called_results,
-            page_id=top_obj["page_id"],
-            lang=top_obj["lang"],
-            rag_opener=open_rag,
-            stats=stats,
-        )
-    stats.milestones = len(milestones_out)
+    finally:
+        _clear_inflight_progress(q_hash)
 
     payload = {
         "answer": answer,
@@ -1575,10 +1880,11 @@ def build_and_cache_ask(
 
     stats.elapsed_seconds = round(time.monotonic() - t0, 3)
     logger.info(
-        "ask built q_hash=%s ui=%s top=%s:%s res=%s sql=%s ms=%d calls=%d/%d "
-        "win=%d ver=%d sha=%d rev_later=%d scan=%.2fs dropped=cur:%d/hist:%d tok=%d+%d %.2fs",
+        "ask built q_hash=%s ui=%s q_lang=%s top=%s:%s res=%s sql=%s ms=%d calls=%d/%d "
+        "win=%d ver=%d sha=%d rev_later=%d scan=%.2fs dropped=cur:%d/hist:%d guard=retry:%d/fallback:%d tok=%d+%d %.2fs",
         q_hash[:12],
         ui_clean or "-",
+        expected_lang or "-",
         stats.top_lang,
         stats.top_page_id,
         stats.history_resolution,
@@ -1593,6 +1899,8 @@ def build_and_cache_ask(
         stats.scan_seconds,
         stats.current_facts_dropped,
         stats.history_facts_dropped,
+        stats.guard_retries,
+        stats.guard_fallbacks,
         stats.input_tokens,
         stats.output_tokens,
         stats.elapsed_seconds,
@@ -1690,10 +1998,15 @@ def get_ask_response(
         rag_con.close()
 
     if _ask_llm_enabled():
+        default_hash_for_job = question_hash(cleaned_q)
         should_schedule = False
         with _inflight_lock:
             if q_hash not in _inflight_jobs:
                 _inflight_jobs.add(q_hash)
+                if not ui_clean or q_hash == default_hash_for_job:
+                    _inflight_progress.pop(default_hash_for_job, None)
+                elif default_hash_for_job not in _inflight_jobs:
+                    _inflight_progress.pop(default_hash_for_job, None)
                 should_schedule = True
         if should_schedule:
             background_tasks.add_task(
@@ -1713,6 +2026,8 @@ def get_ask_response(
         body = json.dumps(fallback_payload, separators=(",", ":"), ensure_ascii=False)
     else:
         assert retrieval is not None
-        payload = _build_pending_payload(cleaned_q, retrieval, ui=ui_clean)
+        default_hash = question_hash(cleaned_q)
+        progress = _get_inflight_progress(default_hash, check_hash=q_hash)
+        payload = _build_pending_payload(cleaned_q, retrieval, ui=ui_clean, progress=progress)
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     return Response(content=body, media_type="application/json")

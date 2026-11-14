@@ -165,3 +165,21 @@ test("019 image credit keys exist with expected placeholders in fi, sv, en", () 
     assert.equal(commonsCredit, "Wikimedia Commons");
   }
 });
+
+test("025 ask live-answer progress keys exist in fi, sv, en", () => {
+  const keys = [
+    "ask.preparingHistory",
+    "ask.readingYears",
+    "ask.translating",
+    "ask.pendingTimeout",
+    "ask.retry",
+  ];
+  for (const code of SUPPORTED) {
+    for (const key of keys) {
+      const val = STRINGS[code][key];
+      assert.equal(typeof val, "string", `${code}.${key} must be a string`);
+      assert.ok(val.trim().length > 0, `${code}.${key} must be non-empty`);
+    }
+    assert.ok(STRINGS[code]["ask.readingYears"].includes("{count}"));
+  }
+});

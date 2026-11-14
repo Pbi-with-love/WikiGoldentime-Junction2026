@@ -521,6 +521,7 @@ function withMockAskUi(payload, ui) {
   const out = structuredClone(payload);
   const normalizedUi = ui ? String(ui) : null;
   out.out_lang = normalizedUi;
+  out.pending = Boolean(out.pending);
   if (normalizedUi) {
     const rawAns = String(out.answer || "");
     out.answer = rawAns.startsWith("[mock] ")
@@ -530,10 +531,41 @@ function withMockAskUi(payload, ui) {
   return out;
 }
 
+const mockPendingPolls = new Map();
+
 export async function mockAsk(q = "", ui = null) {
   await simulateNetwork();
   const raw = String(q || "").trim();
   const lower = raw.toLowerCase();
+
+  if (lower.includes("mockpending")) {
+    const key = `${lower}::${ui || ""}`;
+    const count = (mockPendingPolls.get(key) || 0) + 1;
+    mockPendingPolls.set(key, count);
+    if (count === 1) {
+      return {
+        answer: "Preparing an answer… Closest passage: «Hallin Janne teloitettiin vuonna 1868.» [1]",
+        facts: [],
+        sources: [
+          {
+            n: 1,
+            lang: "fi",
+            page_id: 1256,
+            title: "Talvisota",
+            url: makeWikiUrl("fi", "Talvisota"),
+          },
+        ],
+        top: { lang: "fi", page_id: 1256 },
+        history_available: true,
+        pending: true,
+        out_lang: null,
+        progress: { stage: "history", years_done: 3, years_total: 12 },
+        milestones: [],
+      };
+    }
+    mockPendingPolls.delete(key);
+    return withMockAskUi(WINTER_WAR_END_ASK_FIXTURE, ui);
+  }
 
   // Demo Path A: Winter War end (English, Vietnamese, Finnish, Swedish)
   if (

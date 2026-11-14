@@ -5,7 +5,7 @@
 
 export const MOCK = {
   stars: false, search: false, article: false, timeline: false, asof: false, diff: false,
-  summary: false, ask: false, compare: false, threads: true, road: true, "topic-road": true,
+  summary: false, ask: false, compare: false, threads: false, road: true, "topic-road": false,
 };
 
 const API_BASE = (globalThis.process?.env?.API_BASE ?? "").replace(/\/+$/, "");
@@ -124,7 +124,8 @@ export async function getDiff(pageId, from = "2006", to = "2026") {
 }
 
 /**
- * GET /api/ask?q=
+ * GET /api/ask?q=&ui=
+ * May return { pending: true, progress?: { stage, years_done, years_total } | null, ... } while building.
  */
 export async function ask(q = "", ui = null) {
   if (MOCK.ask) return mockAsk(q, ui);

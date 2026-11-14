@@ -393,6 +393,62 @@ a:focus-visible,
   text-decoration: underline;
 }
 
+.ask-progress-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  background-color: var(--kaamos);
+  border: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  color: var(--frost);
+}
+
+.ask-progress-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--lichen);
+  flex-shrink: 0;
+  animation: askPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes askPulse {
+  0%, 100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-progress-dot {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
+.btn-ask-retry {
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background-color: var(--panel);
+  color: var(--snow);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-ask-retry:hover {
+  border-color: var(--frost);
+}
+
 .star-glyph {
   color: var(--birch);
 }
@@ -624,6 +680,7 @@ a:focus-visible,
   flex-direction: column;
   gap: 3px;
   flex: 1;
+  min-width: 0;
 }
 
 .thread-top-line {
@@ -640,6 +697,8 @@ a:focus-visible,
   background-color: var(--panel);
   border: 1px solid var(--border);
   color: var(--frost);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .thread-branch.is-ghost .thread-reason {
@@ -654,10 +713,15 @@ a:focus-visible,
   font-size: 0.875rem;
   font-weight: 600;
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
+  max-width: 100%;
   cursor: pointer;
   text-align: left;
+}
+
+.thread-target-btn .dot {
+  margin-top: 5px;
 }
 
 .thread-target-btn:hover {
@@ -665,9 +729,11 @@ a:focus-visible,
 }
 
 .thread-summary {
+  margin: 0;
   font-size: 0.8125rem;
   color: var(--frost);
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 /* Constellation Bar (--birch trail + #path-... permalink) */
@@ -1980,7 +2046,10 @@ a:focus-visible,
 .road-card-lanes {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  max-width: 100%;
+  min-width: 0;
   font-family: var(--font-ui);
   font-size: 0.75rem;
   color: var(--frost);
@@ -1994,16 +2063,25 @@ a:focus-visible,
 
 .lane-coverage-text {
   color: var(--frost);
+  min-width: 0;
 }
 
 /* Row 2: Heading + inline memory provenance */
 .road-card-header-row {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: 6px 14px;
   flex-shrink: 0;
+}
+
+.road-card-title-block {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .road-card-title {
@@ -2012,23 +2090,45 @@ a:focus-visible,
   font-weight: 600;
   line-height: 1.24;
   color: var(--snow);
+  overflow-wrap: anywhere;
+}
+
+.road-card-why {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--frost);
+  overflow-wrap: anywhere;
 }
 
 .road-memory-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  padding: 4px 0 0 0;
   background: transparent;
   border: none;
   font-family: var(--font-ui);
   font-size: 0.75rem;
+  line-height: 1.35;
   color: var(--frost);
-  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.road-memory-stats::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--frost);
 }
 
 /* Topic Road optional thumbnail */
 .road-event-thumb-row {
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2044,15 +2144,13 @@ a:focus-visible,
 }
 
 .road-event-thumb-caption {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-ui);
   font-size: 0.75rem;
+  line-height: 1.4;
   color: var(--frost);
-  text-decoration: underline;
-  text-decoration-color: rgba(138, 155, 179, 0.45);
-}
-
-.road-event-thumb-caption:hover {
-  color: var(--snow);
+  overflow-wrap: anywhere;
 }
 
 /* Row 3: Brief Summary */

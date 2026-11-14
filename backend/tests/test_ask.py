@@ -1914,3 +1914,233 @@ def test_b5_same_language_ask_translates_finnish_milestones():
     en_hash = ask.question_hash(q_en, ui="en")
     assert store["cache_hashes"][en_hash] == summary.source_hash(default_json)
 
+
+def test_025_question_lang_decisions():
+    assert ask.question_lang("Who was Hallin Janne?") == "en"
+    assert ask.question_lang("When was Hallin Janne executed?") == "en"
+    assert ask.question_lang("Who was Kaarlo Juho Ståhlberg?") == "en"
+    assert ask.question_lang("Miten talvisota päättyi?") == "fi"
+    assert ask.question_lang("Hur slutade vinterkriget?") == "sv"
+    assert ask.question_lang("A revolt of crofters at Kuorsumaa") == "en"
+    assert ask.question_lang("Kriget mot de tyska trupperna i Lappland 1944–1945") == "sv"
+    assert ask.question_lang("Suomen talouskriisi 1990-luvun alussa") == "fi"
+    assert ask.question_lang("koko") is None
+    assert ask.question_lang("Talvisota") is None
+
+
+def test_025_output_guard_retry_succeeds():
+    store = _sample_store(with_history=True)
+    ask._cache_table_ready = False
+    q = "Who was Hallin Janne?"
+
+    client = _make_fake_llm_client(
+        [
+            # 1. Current answer initially in Finnish -> guard triggers retry
+            {
+                "found": True,
+                "answer": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan [1].",
+                "facts": [
+                    {
+                        "text": "Sopimus solmittiin 12. maaliskuuta 1940, ja se päätti talvisodan.",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 2. Current retry -> English
+            {
+                "found": True,
+                "answer": "The Moscow Peace Treaty was signed on 12 March 1940 and ended the Winter War [1].",
+                "facts": [
+                    {
+                        "text": "The treaty was signed on 12 March 1940 and ended the Winter War.",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 3. History year 2024 initially in Finnish -> guard triggers retry
+            {
+                "found": True,
+                "answer": "Sopimus oli allekirjoitettu vuonna 1940 ja se päätti sodan sekä toi rauhan.",
+                "facts": [
+                    {
+                        "text": "Sopimus oli allekirjoitettu vuonna 1940 ja se päätti sodan.",
+                        "source_sentence": "Sopimus allekirjoitettiin 1940.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 4. History year 2024 retry -> English
+            {
+                "found": True,
+                "answer": "The treaty was signed in 1940 and ended the war.",
+                "facts": [
+                    {
+                        "text": "The treaty was signed in 1940 and ended the war.",
+                        "source_sentence": "Sopimus allekirjoitettiin 1940.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 5. History current year -> English directly
+            {
+                "found": True,
+                "answer": "The treaty was signed on 12 March 1940 and ended the Winter War.",
+                "facts": [
+                    {
+                        "text": "The treaty was signed on 12 March 1940 and ended the Winter War.",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan.",
+                        "n": 1,
+                    }
+                ],
+            },
+        ]
+    )
+
+    payload, stats = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client,
+        embed_fn=lambda texts: ([[0.1, 0.2, 0.3]], 5),
+    )
+
+    assert stats.guard_retries == 2
+    assert stats.guard_fallbacks == 0
+    assert stats.total_llm_calls == 5
+    assert "CRITICAL RETRY" in client.recorded_calls[1]["messages"][0]["content"]
+    assert "CRITICAL RETRY" in client.recorded_calls[3]["messages"][0]["content"]
+    assert payload["answer"].startswith("The Moscow Peace Treaty")
+    assert payload["facts"][0]["source_sentence"] == "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940."
+    assert payload["milestones"][0]["answer"].startswith("The treaty was signed in 1940")
+    assert payload["milestones"][0]["facts"][0]["source_sentence"] == "Sopimus allekirjoitettiin 1940."
+
+
+def test_025_output_guard_translator_fallback_and_source_untouched():
+    store = _sample_store(with_history=True)
+    ask._cache_table_ready = False
+    q = "Who was Hallin Janne?"
+
+    fi_cur_ans = "Moskovan rauhansopimus oli solmittu vuonna 1940 ja se päätti talvisodan sekä toi rauhan [1]."
+    fi_cur_fact = "Sopimus oli solmittu 12. maaliskuuta 1940, ja se päätti talvisodan."
+    fi_hist_ans = "Sopimus oli allekirjoitettu vuonna 1940 ja se päätti sodan."
+    fi_hist_fact = "Sopimus oli allekirjoitettu vuonna 1940 ja se päätti tämän sodan."
+
+    en_cur_ans = "The Moscow Peace Treaty was concluded in 1940 and ended the Winter War [1]."
+    en_cur_fact = "The treaty was concluded on 12 March 1940 and ended the Winter War."
+    en_hist_ans = "The treaty was signed in 1940 and ended the war."
+    en_hist_fact = "The treaty was signed in 1940 and ended this war."
+
+    client = _make_fake_llm_client(
+        [
+            # Current initial + retry (both Finnish!)
+            {
+                "found": True,
+                "answer": fi_cur_ans,
+                "facts": [{"text": fi_cur_fact, "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.", "n": 1}],
+            },
+            {
+                "found": True,
+                "answer": fi_cur_ans,
+                "facts": [{"text": fi_cur_fact, "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.", "n": 1}],
+            },
+            # History year 2024 initial + retry (both Finnish!)
+            {
+                "found": True,
+                "answer": fi_hist_ans,
+                "facts": [{"text": fi_hist_fact, "source_sentence": "Sopimus allekirjoitettiin 1940.", "n": 1}],
+            },
+            {
+                "found": True,
+                "answer": fi_hist_ans,
+                "facts": [{"text": fi_hist_fact, "source_sentence": "Sopimus allekirjoitettiin 1940.", "n": 1}],
+            },
+            # History current year (English)
+            {
+                "found": True,
+                "answer": "The treaty was signed on 12 March 1940 and ended the Winter War.",
+                "facts": [
+                    {
+                        "text": "The treaty was signed on 12 March 1940 and ended the Winter War.",
+                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 6th call: one-call translator fallback for the 4 still-Finnish strings
+            {
+                "items": [
+                    {"id": "t0", "text": en_cur_ans},
+                    {"id": "t1", "text": en_cur_fact},
+                    {"id": "t2", "text": en_hist_ans},
+                    {"id": "t3", "text": en_hist_fact},
+                ]
+            },
+        ]
+    )
+
+    payload, stats = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client,
+        embed_fn=lambda texts: ([[0.1, 0.2, 0.3]], 5),
+    )
+
+    assert stats.guard_retries == 2
+    assert stats.guard_fallbacks == 4
+    assert stats.total_llm_calls == 6
+    assert payload["answer"] == en_cur_ans
+    assert payload["facts"][0]["text"] == en_cur_fact
+    assert payload["facts"][0]["source_sentence"] == "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940."
+    assert payload["milestones"][0]["answer"] == en_hist_ans
+    assert payload["milestones"][0]["facts"][0]["text"] == en_hist_fact
+    assert payload["milestones"][0]["facts"][0]["source_sentence"] == "Sopimus allekirjoitettiin 1940."
+
+    # Translator call never sees source_sentence
+    translate_dump = json.dumps(client.recorded_calls[-1], ensure_ascii=False)
+    assert "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940." not in translate_dump
+    assert "Sopimus allekirjoitettiin 1940." not in translate_dump
+
+
+def test_025_pending_progress_exposure(monkeypatch):
+    store = _sample_store(with_history=True)
+    ask._cache_table_ready = False
+    ask._inflight_jobs.clear()
+    ask._inflight_progress.clear()
+
+    q = "When was Hallin Janne executed?"
+    default_hash = ask.question_hash(q)
+
+    monkeypatch.setattr(ask.summary, "_open_rag", lambda: FakeConnection(store))
+    monkeypatch.setattr(ask.rag_common, "embed", lambda texts, truncate=True: ([[0.1, 0.2, 0.3]], 5))
+    from fastapi import BackgroundTasks
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, func, *args: None)
+    tc = TestClient(main.app)
+
+    # First pending call has no history progress yet -> progress is None
+    r1 = tc.get(f"/api/ask?q={q}&ui=en")
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["pending"] is True
+    assert d1["progress"] is None
+
+    # Simulate background worker updating progress for default_hash
+    ask._set_inflight_progress(default_hash, "history", years_done=4, years_total=12)
+    r2 = tc.get(f"/api/ask?q={q}&ui=en")
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["pending"] is True
+    assert d2["progress"] == {"stage": "history", "years_done": 4, "years_total": 12}
+
+    # Clearing _inflight_jobs invalidates stale _inflight_progress
+    ask._inflight_jobs.clear()
+    r3 = tc.get(f"/api/ask?q={q}&ui=en")
+    assert r3.status_code == 200
+    assert r3.json()["progress"] is None
+    ask._inflight_jobs.clear()
+    ask._inflight_progress.clear()
+
+

@@ -104,7 +104,9 @@ test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim exa
   assert.equal(counts.sv, 4921);
   assert.equal(counts.en, 5254);
   assert.equal(nullWikidata, 410);
-  assert.equal(historyCount, 50);
+  // mock has 50 fixtures; real = fi articles with history (dataset M), derived from the data
+  if (MOCK.stars) assert.equal(historyCount, 50);
+  else assert.ok(historyCount >= 50 && historyCount <= counts.fi);
 
   let trilingualCount = 0;
   for (const langSet of langsByWikidata.values()) {
@@ -305,15 +307,19 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
     }
   });
 
-  // Non-history article ask returns history_available=false and empty milestones
+  // Non-history article ask returns history_available=false and empty milestones in mock mode;
+  // live DB now indexes history for all 19,285 fi articles (including Engel via fi sibling).
   const noHistQuery = MOCK.ask ? "Vinterkriget" : "Who was Carl Ludvig Engel?";
   const noHist = await ask(noHistQuery);
   if (!MOCK.ask) {
     assert.equal(noHist.pending, false);
     assert.ok(!noHist.answer.includes("[mock]"));
+    assert.equal(typeof noHist.history_available, "boolean");
+    assert.ok(Array.isArray(noHist.milestones));
+  } else {
+    assert.equal(noHist.history_available, false);
+    assert.deepEqual(noHist.milestones, []);
   }
-  assert.equal(noHist.history_available, false);
-  assert.deepEqual(noHist.milestones, []);
 
   // Translated ask (?ui=sv) returns out_lang="sv" and preserves grounded original-language sources
   const resSv = await ask("How did the Winter War end?", "sv");
@@ -326,6 +332,12 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
   assert.deepEqual(milestoneShape(resSv.milestones), milestoneShape(res.milestones));
   if (MOCK.ask) {
     assert.ok(resSv.answer.includes("[mock] (sv)"));
+    const pendingFirst = await ask("mockpending question", "en");
+    assert.equal(pendingFirst.pending, true);
+    assert.equal(pendingFirst.progress.years_total, 12);
+    const pendingSecond = await ask("mockpending question", "en");
+    assert.equal(pendingSecond.pending, false);
+    assert.equal(pendingSecond.out_lang, "en");
   } else {
     assert.equal(resSv.pending, false);
     assert.ok(!resSv.answer.includes("[mock]"));
@@ -345,7 +357,14 @@ test("GET /api/threads supports Demo Path C (5-hop chain from 52097 with ghost t
     assert.ok(Array.isArray(res.threads));
     assert.ok(res.threads.length >= 1 && res.threads.length <= 4);
 
-    if (hop === 0) {
+    if (!MOCK.threads) {
+      for (const t of res.threads) {
+        assert.equal(typeof t.target.x, "number");
+        assert.ok(["before", "after", "semantic"].includes(t.type));
+        assert.ok(!t.summary.includes("[mock]"));
+      }
+    }
+    if (MOCK.threads && hop === 0) {
       const ghost = res.threads.find((t) => t.type === "ghost");
       assert.ok(ghost, "Hop 0 from 52097 must include a ghost thread");
       assert.equal(ghost.first_year, 2007);
@@ -457,11 +476,15 @@ test("GET /api/road/{lang}/{page_id} returns station-based Talvitie fixtures (Ta
 });
 
 test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suomen sisällissota, Autonomian aika)", async () => {
-  const autonomia = await getTopicRoad({ category: "Autonomian aika" });
-  assert.equal(autonomia.topic.category, "Autonomian aika");
+  const autonomia = await getTopicRoad({ category: "Suomen suuriruhtinaskunta" });
+  assert.equal(
+    autonomia.topic.category,
+    MOCK["topic-road"] ? "Autonomian aika" : "Suomen suuriruhtinaskunta"
+  );
   assert.ok(Array.isArray(autonomia.eras) && autonomia.eras.length >= 3);
   assert.ok(Array.isArray(autonomia.events) && autonomia.events.length >= 10);
   if (MOCK["topic-road"]) assert.ok(autonomia.events[0].summary_short.includes("[mock]"));
+  else assert.ok(autonomia.events.every((ev) => !String(ev.summary_short || "").includes("[mock]")));
 
   const talviTopic = await getTopicRoad({ lang: "fi", page_id: 1256 });
   assert.equal(talviTopic.topic.title, "Talvisota");
@@ -470,6 +493,37 @@ test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suom
   const sisallisTopic = await getTopicRoad({ lang: "fi", page_id: 1150 });
   assert.equal(sisallisTopic.topic.title, "Suomen sisällissota");
   assert.ok(sisallisTopic.events.length >= 10);
+
+  const svTopic = await getTopicRoad({ lang: "sv", page_id: 23612 });
+  assert.ok(Array.isArray(svTopic.events) && svTopic.events.length >= 5);
+
+  if (!MOCK["topic-road"]) {
+    const seeds = talviTopic.events.filter((ev) => ev.why?.kind === "seed");
+    assert.equal(seeds.length, 1);
+    assert.equal(seeds[0].page_id, 1256);
+
+    const wds = talviTopic.events.map((ev) => ev.wikidata_id).filter(Boolean);
+    assert.equal(new Set(wds).size, wds.length, "No duplicate wikidata_id in topic-road");
+
+    let seenNull = false;
+    let prevYear = -Infinity;
+    for (const ev of talviTopic.events) {
+      assert.ok(!String(ev.summary_short || "").includes("[mock]"));
+      assert.ok(!String(ev.summary_long || "").includes("[mock]"));
+      assert.ok(!String(ev.summary_short || "").startsWith("#"));
+      if (ev.event_year === null) {
+        seenNull = true;
+      } else {
+        assert.equal(seenNull, false, "Undated stations must appear only at the end");
+        assert.ok(ev.event_year >= prevYear, "Dated years must be non-decreasing");
+        prevYear = ev.event_year;
+      }
+    }
+
+    const talviKeys = new Set(talviTopic.events.map((ev) => `${ev.lang}:${ev.page_id}`));
+    const sisallisKeys = new Set(sisallisTopic.events.map((ev) => `${ev.lang}:${ev.page_id}`));
+    assert.notDeepEqual([...talviKeys].sort(), [...sisallisKeys].sort());
+  }
 });
 
 test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatkosota, and short-article overview-only responses", async () => {

@@ -8,24 +8,28 @@ import {
   fallbackNoteText,
   setLang,
 } from "./i18n.js";
+import { ask } from "./api.js";
+
+const ASK_POLL_INTERVAL_MS = 3000;
+const ASK_POLL_MAX_MS = 90000;
 
 const KNOWN_ROAD_PAGE_IDS = new Set([1256, 1150]);
 
 function isRoadEligibleArticle(article) {
-  if (!article) return false;
-  const stationCount = Array.isArray(article.stations)
-    ? article.stations.length
-    : Number(article.station_count || article.stations || 0);
-  if (stationCount >= 4) return true;
-  if (typeof article.words === "number" && article.words >= 1500) return true;
-  if (typeof article.length === "number" && article.length >= 9000) return true;
-  const headingCount = (String(article.text || "").match(/^##\s+/gm) || []).length;
-  if (headingCount >= 4) return true;
-  return false;
+  return Boolean(article);
 }
 
-function normalizeLanes(lanes) {
-  if (!lanes) return { fi: true, sv: 0, en: 0 };
+function normalizeLanes(lanes, fallbackLang = null) {
+  if (!lanes) {
+    if (fallbackLang === "fi" || fallbackLang === "sv" || fallbackLang === "en") {
+      return {
+        fi: fallbackLang === "fi",
+        sv: fallbackLang === "sv" ? 1 : 0,
+        en: fallbackLang === "en" ? 1 : 0,
+      };
+    }
+    return { fi: true, sv: 0, en: 0 };
+  }
   if (Array.isArray(lanes)) {
     return {
       fi: lanes.includes("fi"),
@@ -34,7 +38,7 @@ function normalizeLanes(lanes) {
     };
   }
   return {
-    fi: Boolean(lanes.fi ?? true),
+    fi: Boolean(lanes.fi),
     sv: Number(lanes.sv || 0),
     en: Number(lanes.en || 0),
   };
@@ -88,35 +92,47 @@ function normalizeRoadData(raw) {
 
   const events = raw.events || [];
   const topicMeta = raw.topic || {};
-  const stations = events.map((ev, idx) => ({
-    no: idx + 1,
-    lang: ev.lang || topicMeta.lang || "fi",
-    page_id: ev.page_id ?? null,
-    heading: ev.heading || ev.title || `Milestone ${idx + 1}`,
-    words: ev.words ?? 0,
-    reading_minutes: ev.reading_minutes ?? 1,
-    event_year: ev.event_year ?? null,
-    event_label: ev.event_label || (ev.event_year ? String(ev.event_year) : ""),
-    url: ev.url || null,
-    thumb_url: ev.thumb_url || null,
-    thumb_file: ev.thumb_file || null,
-    summary: ev.summary || ev.summary_short || "",
-    facts: Array.isArray(ev.facts) ? ev.facts.slice(0, 3) : [],
-    years: Array.isArray(ev.years) ? ev.years : ev.event_year ? [ev.event_year] : [],
-    posts: Array.isArray(ev.posts) ? ev.posts : [],
-    text: ev.text || ev.summary_long || ev.summary_short || "",
-    history:
-      ev.history ||
-      (ev.has_history && ev.first_added_year
+  const stations = events.map((ev, idx) => {
+    const stLang = ev.lang || topicMeta.lang || "fi";
+    const historyStats = ev.history_stats || ev.history?.stats || null;
+    return {
+      no: idx + 1,
+      lang: stLang,
+      page_id: ev.page_id ?? null,
+      heading: ev.heading || ev.title || `Milestone ${idx + 1}`,
+      words: ev.words ?? 0,
+      reading_minutes: ev.reading_minutes ?? 1,
+      event_year: ev.event_year ?? null,
+      event_label: ev.event_label || (ev.event_year ? String(ev.event_year) : ""),
+      url: ev.url || null,
+      thumb_url: ev.thumb_url || ev.image?.thumb_url || null,
+      thumb_file: ev.thumb_file || null,
+      image: ev.image || null,
+      siblings: ev.siblings || null,
+      why: ev.why || null,
+      summary: ev.summary || ev.summary_short || "",
+      facts: Array.isArray(ev.facts) ? ev.facts.slice(0, 3) : [],
+      years: Array.isArray(ev.years) ? ev.years : ev.event_year ? [ev.event_year] : [],
+      posts: Array.isArray(ev.posts) ? ev.posts : [],
+      text: ev.text || ev.summary_long || ev.summary_short || "",
+      history_stats: historyStats,
+      history: ev.history
+        ? {
+            ...ev.history,
+            stats: ev.history.stats || historyStats,
+          }
+        : ev.has_history && ev.first_added_year
         ? {
             added_year: ev.first_added_year,
-            changes: ev.changes || 1,
+            changes: historyStats?.versions ?? ev.changes ?? 1,
             war_years: ev.war_years || [],
+            stats: historyStats,
           }
-        : null),
-    lanes: normalizeLanes(ev.lanes),
-    branches: Array.isArray(ev.branches) ? ev.branches : [],
-  }));
+        : null,
+      lanes: normalizeLanes(ev.lanes, stLang),
+      branches: Array.isArray(ev.branches) ? ev.branches : [],
+    };
+  });
   const totalWords = stations.reduce((acc, s) => acc + s.words, 0);
   const totalMins = stations.reduce((acc, s) => acc + s.reading_minutes, 0);
   return {
@@ -270,6 +286,7 @@ export function createUI({
     chip.addEventListener("click", () => {
       const action = chip.dataset.action;
       if (action === "ask") {
+        stopAskPolling();
         const q = chip.dataset.query || t("demo.askQuery");
         searchInput.value = q;
         searchClearBtn.hidden = false;
@@ -319,6 +336,7 @@ export function createUI({
   // Search form submit
   searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    stopAskPolling();
     const q = searchInput.value.trim();
     if (!q) {
       clearLeftOverlays();
@@ -333,6 +351,7 @@ export function createUI({
   });
 
   btnAsk.addEventListener("click", () => {
+    stopAskPolling();
     const q = searchInput.value.trim() || t("demo.askQuery");
     searchInput.value = q;
     searchClearBtn.hidden = false;
@@ -365,7 +384,39 @@ export function createUI({
     searchFeedback.hidden = false;
   }
 
+  let askPollTimer = null;
+  let askPollSeq = 0;
+  let lastReadyAskState = null;
+
+  function stopAskPolling() {
+    askPollSeq += 1;
+    if (askPollTimer !== null) {
+      clearTimeout(askPollTimer);
+      askPollTimer = null;
+    }
+  }
+
+  function isAskWaiting(askRes) {
+    if (!askRes) return false;
+    if (askRes.pending === true) return true;
+    if (uiLang && askRes.out_lang == null) return true;
+    return false;
+  }
+
+  function getAskProgressLabel(askRes) {
+    if (askRes?.pending) {
+      const total = Number(askRes.progress?.years_total || 0);
+      if (total > 0) {
+        return t("ask.readingYears", { count: total });
+      }
+      return t("ask.preparingHistory");
+    }
+    return t("ask.translating");
+  }
+
   function clearLeftOverlays() {
+    stopAskPolling();
+    lastReadyAskState = null;
     searchClearBtn.hidden = searchInput.value.trim().length === 0;
     searchFeedback.hidden = true;
     searchFeedback.classList.remove("is-error");
@@ -378,6 +429,7 @@ export function createUI({
 
   // Render Search Results + "also in" language dots
   function renderSearchResults(searchRes) {
+    stopAskPolling();
     askPanel.hidden = true;
     searchFeedback.classList.remove("is-error");
 
@@ -462,13 +514,14 @@ export function createUI({
   }
 
   // Render Grounded AI Ask Answer + "This answer changed N times" strip + Memory Threads tree
-  function renderAskResult({
+  function renderAskPanelContent({
     query,
     askRes,
     threads = [],
     activeMilestoneIdx = -1,
     milestoneDiff = null,
     todayRevId = null,
+    timedOut = false,
   }) {
     searchResultsPanel.hidden = true;
     searchFeedback.hidden = true;
@@ -492,7 +545,9 @@ export function createUI({
       .join("");
 
     let milestonesHtml = "";
-    if (!askRes.history_available || !askRes.milestones || askRes.milestones.length === 0) {
+    if (askRes.pending) {
+      milestonesHtml = "";
+    } else if (!askRes.history_available || !askRes.milestones || askRes.milestones.length === 0) {
       milestonesHtml = `<p class="ask-no-history">${escapeHtml(t("ask.noHistory"))}</p>`;
     } else {
       const m = askRes.milestones.length;
@@ -638,6 +693,26 @@ export function createUI({
       }
     }
 
+    const waiting = isAskWaiting(askRes);
+    let askProgressHtml = "";
+    if (waiting) {
+      if (timedOut) {
+        askProgressHtml = `
+          <div class="ask-progress-line is-timeout" role="status" aria-live="polite">
+            <span class="ask-progress-text">${escapeHtml(t("ask.pendingTimeout"))}</span>
+            <button type="button" class="btn-ask-retry" id="ask-retry-btn">${escapeHtml(t("ask.retry"))}</button>
+          </div>
+        `;
+      } else {
+        askProgressHtml = `
+          <div class="ask-progress-line" role="status" aria-live="polite">
+            <span class="ask-progress-dot" aria-hidden="true"></span>
+            <span class="ask-progress-text">${escapeHtml(getAskProgressLabel(askRes))}</span>
+          </div>
+        `;
+      }
+    }
+
     const threadsTreeHtml = renderThreadsTreeHtml(topTitle, askRes.top, threads);
 
     askPanel.innerHTML = `
@@ -649,6 +724,7 @@ export function createUI({
         <button type="button" class="btn-inline-close" id="close-ask-panel">${escapeHtml(t("nav.close"))}</button>
       </div>
       ${askProvenanceHtml}
+      ${askProgressHtml}
       <div class="ask-answer-body">${formatAnswerText(askRes.answer)}</div>
       ${sourcesHtml ? `<div class="ask-sources-row">${sourcesHtml}</div>` : ""}
       ${milestonesHtml}
@@ -657,8 +733,30 @@ export function createUI({
     askPanel.hidden = false;
 
     askPanel.querySelector("#close-ask-panel")?.addEventListener("click", () => {
+      stopAskPolling();
+      lastReadyAskState = null;
       askPanel.hidden = true;
       onClearSearch?.();
+    });
+
+    askPanel.querySelector("#ask-retry-btn")?.addEventListener("click", () => {
+      stopAskPolling();
+      renderAskPanelContent({
+        query,
+        askRes,
+        threads,
+        activeMilestoneIdx,
+        milestoneDiff,
+        todayRevId,
+        timedOut: false,
+      });
+      startAskPolling({
+        query,
+        askRes,
+        threads,
+        startedAt: Date.now(),
+        immediate: true,
+      });
     });
 
     askPanel.querySelector("#ask-top-star-btn")?.addEventListener("click", () => {
@@ -686,19 +784,152 @@ export function createUI({
     wireThreadButtons(askPanel);
   }
 
+  function startAskPolling({ query, askRes, threads = [], startedAt = Date.now(), immediate = false }) {
+    const seq = ++askPollSeq;
+    let currentAskRes = askRes;
+
+    async function pollOnce() {
+      askPollTimer = null;
+      if (seq !== askPollSeq || askPanel.hidden) return;
+      if (!immediate && Date.now() - startedAt >= ASK_POLL_MAX_MS) {
+        renderAskPanelContent({
+          query,
+          askRes: currentAskRes,
+          threads,
+          activeMilestoneIdx: -1,
+          milestoneDiff: null,
+          todayRevId: null,
+          timedOut: true,
+        });
+        return;
+      }
+
+      try {
+        const nextRes = await ask(query, uiLang);
+        if (seq !== askPollSeq || askPanel.hidden) return;
+        if (!isAskWaiting(nextRes)) {
+          lastReadyAskState = { query, askRes: nextRes };
+          renderAskPanelContent({
+            query,
+            askRes: nextRes,
+            threads,
+            activeMilestoneIdx: -1,
+            milestoneDiff: null,
+            todayRevId: null,
+            timedOut: false,
+          });
+          return;
+        }
+        currentAskRes = nextRes;
+        if (Date.now() - startedAt >= ASK_POLL_MAX_MS) {
+          renderAskPanelContent({
+            query,
+            askRes: currentAskRes,
+            threads,
+            activeMilestoneIdx: -1,
+            milestoneDiff: null,
+            todayRevId: null,
+            timedOut: true,
+          });
+          return;
+        }
+        const progressTextEl = askPanel.querySelector(".ask-progress-text");
+        const answerBodyEl = askPanel.querySelector(".ask-answer-body");
+        if (progressTextEl) {
+          progressTextEl.textContent = getAskProgressLabel(currentAskRes);
+        }
+        if (answerBodyEl && currentAskRes.answer) {
+          answerBodyEl.innerHTML = formatAnswerText(currentAskRes.answer);
+        }
+      } catch {
+        if (seq !== askPollSeq || askPanel.hidden) return;
+        if (Date.now() - startedAt >= ASK_POLL_MAX_MS) {
+          renderAskPanelContent({
+            query,
+            askRes: currentAskRes,
+            threads,
+            activeMilestoneIdx: -1,
+            milestoneDiff: null,
+            todayRevId: null,
+            timedOut: true,
+          });
+          return;
+        }
+      }
+
+      if (seq === askPollSeq && !askPanel.hidden) {
+        askPollTimer = setTimeout(pollOnce, ASK_POLL_INTERVAL_MS);
+      }
+    }
+
+    if (immediate) {
+      pollOnce();
+    } else {
+      askPollTimer = setTimeout(pollOnce, ASK_POLL_INTERVAL_MS);
+    }
+  }
+
+  function renderAskResult({
+    query,
+    askRes,
+    threads = [],
+    activeMilestoneIdx = -1,
+    milestoneDiff = null,
+    todayRevId = null,
+  }) {
+    stopAskPolling();
+    let resolvedAskRes = askRes;
+    if (
+      activeMilestoneIdx >= 0 &&
+      isAskWaiting(resolvedAskRes) &&
+      lastReadyAskState?.query === query &&
+      !isAskWaiting(lastReadyAskState.askRes)
+    ) {
+      resolvedAskRes = lastReadyAskState.askRes;
+    }
+    if (!isAskWaiting(resolvedAskRes)) {
+      lastReadyAskState = { query, askRes: resolvedAskRes };
+    }
+    renderAskPanelContent({
+      query,
+      askRes: resolvedAskRes,
+      threads,
+      activeMilestoneIdx,
+      milestoneDiff,
+      todayRevId,
+      timedOut: false,
+    });
+    if (isAskWaiting(resolvedAskRes)) {
+      startAskPolling({
+        query,
+        askRes: resolvedAskRes,
+        threads,
+        startedAt: Date.now(),
+        immediate: false,
+      });
+    }
+  }
+
   function renderThreadsTreeHtml(sourceTitle, sourceKey, threads = []) {
     if (!threads || threads.length === 0) return "";
     const branchesHtml = threads
-      .map((t) => {
+      .map((t, idx) => {
         const isGhost = t.type === "ghost";
+        const isLast = idx === threads.length - 1;
+        const connector = isGhost ? "└ ─ ─" : isLast ? "└──" : "├──";
         const branchClass = isGhost ? "thread-branch is-ghost" : `thread-branch is-${escapeHtml(t.type)}`;
         const ghostYears =
           isGhost && t.first_year && t.removed_year
             ? ` (${t.first_year}–${t.removed_year})`
             : "";
+        const targetLang = t.target.lang || "fi";
+        const summaryHtml =
+          t.summary && String(t.summary).trim()
+            ? `<p class="thread-summary" lang="${escapeHtml(targetLang)}">${escapeHtml(t.summary)}</p>`
+            : "";
         return `
           <div class="${branchClass}">
-            <div class="thread-connector" aria-hidden="true">${isGhost ? "└ ─ ─" : "├──"}</div>
+            <div class="thread-connector" aria-hidden="true">${connector}</div>
             <div class="thread-content">
               <div class="thread-top-line">
                 <span class="thread-reason">${escapeHtml(t.reason)}</span>
@@ -707,14 +938,14 @@ export function createUI({
                   class="thread-target-btn"
                   data-source-lang="${escapeHtml(sourceKey?.lang || "fi")}"
                   data-source-id="${sourceKey?.page_id || ""}"
-                  data-target-lang="${escapeHtml(t.target.lang)}"
+                  data-target-lang="${escapeHtml(targetLang)}"
                   data-target-id="${t.target.page_id}"
                 >
-                  <span class="dot dot-${escapeHtml(t.target.lang)}"></span>
-                  <span>${escapeHtml(t.target.title)}${escapeHtml(ghostYears)}</span>
+                  <span class="dot dot-${escapeHtml(targetLang)}"></span>
+                  <span lang="${escapeHtml(targetLang)}">${escapeHtml(t.target.title)}${escapeHtml(ghostYears)}</span>
                 </button>
               </div>
-              <p class="thread-summary">${escapeHtml(t.summary)}</p>
+              ${summaryHtml}
             </div>
           </div>
         `;
@@ -1098,8 +1329,12 @@ export function createUI({
     roadTopicTitle.textContent = topicMeta.title || art.title || "Talvisota";
     if (roadTopicMeta) {
       const eras = roadData.eras || [];
-      const eraSpan =
-        eras.length > 0 ? ` · ${eras[0].from_year}–${eras[eras.length - 1].to_year}` : "";
+      let eraSpan = "";
+      if (eras.length > 0) {
+        const firstYr = eras[0].from_year;
+        const lastYr = eras[eras.length - 1].to_year;
+        eraSpan = firstYr === lastYr ? ` · ${firstYr}` : ` · ${firstYr}–${lastYr}`;
+      }
       roadTopicMeta.textContent = `${t("road.historicalMilestones", { count: totalSections })}${eraSpan}`;
     }
 
@@ -1155,9 +1390,12 @@ export function createUI({
     if (skyLegend) skyLegend.hidden = false;
   }
 
-  function renderLaneDotsHtml(lanes) {
-    const laneObj = normalizeLanes(lanes);
-    const dots = [`<span class="dot dot-fi" title="${escapeHtml(langName("fi"))}"></span>`];
+  function renderLaneDotsHtml(lanes, fallbackLang = null) {
+    const laneObj = normalizeLanes(lanes, fallbackLang);
+    const dots = [];
+    if (laneObj.fi) {
+      dots.push(`<span class="dot dot-fi" title="${escapeHtml(langName("fi"))}"></span>`);
+    }
     if (laneObj.sv > 0) {
       dots.push(`<span class="dot dot-sv" title="${escapeHtml(langName("sv"))}"></span>`);
     }
@@ -1167,19 +1405,47 @@ export function createUI({
     return dots.join("");
   }
 
-  function renderLaneCoverageHtml(lanes) {
-    const laneObj = normalizeLanes(lanes);
-    const coveredNames = [];
-    if (laneObj.sv > 0) coveredNames.push(langName("sv"));
-    if (laneObj.en > 0) coveredNames.push(langName("en"));
-    const labelText =
-      coveredNames.length > 0
-        ? t("road.alsoCoveredIn", { langs: coveredNames.join(", ") })
-        : t("road.finnishOnly");
+  function renderLaneCoverageHtml(lanes, stationLang = "fi") {
+    const laneObj = normalizeLanes(lanes, stationLang);
+    const present = ["fi", "sv", "en"].filter((c) => (c === "fi" ? laneObj.fi : laneObj[c] > 0));
+    const others = present.filter((c) => c !== stationLang);
+    let labelText;
+    if (others.length > 0) {
+      labelText = t("road.alsoCoveredIn", { langs: others.map((c) => langName(c)).join(", ") });
+    } else if (stationLang === "sv" || stationLang === "en") {
+      labelText = t(`road.onlyInWiki.${stationLang}`);
+    } else {
+      labelText = t("road.finnishOnly");
+    }
     return `
-      <span class="lane-dots-group">${renderLaneDotsHtml(laneObj)}</span>
+      <span class="lane-dots-group" aria-hidden="true">${renderLaneDotsHtml(laneObj, stationLang)}</span>
       <span class="lane-coverage-text">${escapeHtml(labelText)}</span>
     `;
+  }
+
+  function renderRoadWhyHtml(why) {
+    if (!why || !why.kind) return "";
+    if (why.kind === "seed") {
+      return `<p class="road-card-why">${escapeHtml(t("road.whySeed"))}</p>`;
+    }
+    if (why.kind === "similar") {
+      const base =
+        why.similarity != null
+          ? t("road.whySimilar", { pct: Math.round(Number(why.similarity) * 100) })
+          : t("road.whySimilarNoPct");
+      if (why.category) {
+        return `<p class="road-card-why">${escapeHtml(base)}, ${escapeHtml(
+          t("road.whySharedCategoryPrefix")
+        )} <span lang="fi">${escapeHtml(why.category)}</span></p>`;
+      }
+      return `<p class="road-card-why">${escapeHtml(base)}</p>`;
+    }
+    if (why.kind === "category" && why.category) {
+      return `<p class="road-card-why">${escapeHtml(
+        t("road.whyCategoryPrefix")
+      )} <span lang="fi">${escapeHtml(why.category)}</span></p>`;
+    }
+    return "";
   }
 
   function renderRoadCards() {
@@ -1274,11 +1540,11 @@ export function createUI({
                 <span class="horizon-section-no">${escapeHtml(
                   isTopicRoad ? secNo : t("road.sectionNumbered", { no: secNo })
                 )}</span>
-                <h3 class="horizon-heading">${escapeHtml(st.heading)}</h3>
+                <h3 class="horizon-heading" lang="${escapeHtml(st.lang || "fi")}">${escapeHtml(st.heading)}</h3>
               </div>
               <div class="horizon-strip-right">
-                <span class="horizon-metrics">${metricsText}</span>
-                <span class="horizon-lanes">${renderLaneDotsHtml(st.lanes)}</span>
+                ${metricsText ? `<span class="horizon-metrics">${metricsText}</span>` : ""}
+                <span class="horizon-lanes">${renderLaneDotsHtml(st.lanes, st.lang || "fi")}</span>
               </div>
             </div>
           </article>
@@ -1299,30 +1565,47 @@ export function createUI({
           : "";
       const changesCount = st.history.changes ?? 1;
       const badgeKey = isTopicRoad ? "road.addedChangedTimes" : "road.addedRewrittenTimes";
+      const stats = st.history.stats || st.history_stats;
+      const statsHtml = stats
+        ? `<span class="road-memory-stats">${escapeHtml(
+            `${fmtNumber(stats.reverts ?? 0)} ${t("panel.revertsWord", {
+              count: stats.reverts ?? 0,
+            })} · ${fmtNumber(stats.disputes ?? 0)} ${t("panel.disputesWord", {
+              count: stats.disputes ?? 0,
+            })}`
+          )}</span>`
+        : "";
       memoryBadgeHtml = `
         <div class="road-memory-badge">
           ${warDot}
-          <span>${escapeHtml(t(badgeKey, { year: st.history.added_year, count: changesCount }))}</span>
+          <span class="road-memory-primary">${escapeHtml(
+            t(badgeKey, { year: st.history.added_year, count: fmtNumber(changesCount) })
+          )}</span>
+          ${statsHtml}
         </div>
       `;
     }
 
     // Topic Road optional thumbnail
+    const thumbCaptionFallback =
+      !st.image && st.thumb_file
+        ? `<a class="panel-thumb-credit" href="https://commons.wikimedia.org/wiki/File:${encodeURIComponent(
+            st.thumb_file
+          )}" target="_blank" rel="noopener noreferrer">Wikimedia Commons · ${escapeHtml(
+            st.thumb_file
+          )}</a>`
+        : "";
     const thumbRowHtml =
       isTopicRoad && st.thumb_url
         ? `
-          <div class="road-event-thumb-row">
+          <figure class="road-event-thumb-row">
             <img class="road-event-thumb-img" src="${escapeHtml(st.thumb_url)}" alt="${escapeHtml(st.heading)}" />
             ${
-              st.thumb_file
-                ? `<a class="road-event-thumb-caption" href="https://commons.wikimedia.org/wiki/File:${encodeURIComponent(
-                    st.thumb_file
-                  )}" target="_blank" rel="noopener noreferrer">Wikimedia Commons · ${escapeHtml(
-                    st.thumb_file
-                  )}</a>`
+              st.image || thumbCaptionFallback
+                ? `<figcaption class="road-event-thumb-caption" id="road-event-thumb-caption">${thumbCaptionFallback}</figcaption>`
                 : ""
             }
-          </div>
+          </figure>
         `
         : "";
 
@@ -1390,10 +1673,12 @@ export function createUI({
         `
         : "";
 
+    const stLang = st.lang || roadData.article?.lang || "fi";
+
     // Row 6: Expanded Original Section Markdown (or detailed milestone summary in Topic Road)
     const expandedReaderHtml = expandedSection
       ? `
-        <div class="road-section-reader" id="road-section-reader" tabindex="0" aria-label="${
+        <div class="road-section-reader" id="road-section-reader" lang="${escapeHtml(stLang)}" tabindex="0" aria-label="${
           isTopicRoad ? "Milestone context" : "Original section text"
         }">
           ${renderStationMarkdownHtml(st.text, st.heading, activePostHeading, posts)}
@@ -1460,21 +1745,30 @@ export function createUI({
 
     const canOpenArticle = isTopicRoad ? Boolean(st.page_id) : Boolean(roadData.article?.page_id);
 
+    const whyHtml = isTopicRoad ? renderRoadWhyHtml(st.why) : "";
+    const summaryHtml =
+      st.summary && String(st.summary).trim()
+        ? `<p class="road-card-summary" lang="${escapeHtml(stLang)}">${escapeHtml(st.summary)}</p>`
+        : "";
+
     const nearestCardHtml = `
       <article class="road-card is-nearest" data-road-idx="${idx}">
         <div class="road-card-top-meta">
           <span class="road-card-meta-left">${metaLeftText}</span>
-          <div class="road-card-lanes">${renderLaneCoverageHtml(st.lanes)}</div>
+          <div class="road-card-lanes">${renderLaneCoverageHtml(st.lanes, stLang)}</div>
         </div>
 
         <div class="road-card-header-row">
-          <h2 class="road-card-title">${escapeHtml(st.heading)}</h2>
+          <div class="road-card-title-block">
+            <h2 class="road-card-title" lang="${escapeHtml(stLang)}">${escapeHtml(st.heading)}</h2>
+            ${whyHtml}
+          </div>
           ${memoryBadgeHtml}
         </div>
 
         <div class="road-card-scroll">
           ${thumbRowHtml}
-          <p class="road-card-summary">${escapeHtml(st.summary)}</p>
+          ${summaryHtml}
           ${factsHtml}
           ${postsHtml}
           ${expandedReaderHtml}
@@ -1536,6 +1830,10 @@ export function createUI({
     roadCardsStage.innerHTML = `<div class="road-perspective-deck ${
       expandedSection ? "is-reading" : ""
     }">${horizonHtml}${nearestCardHtml}</div>`;
+
+    if (isTopicRoad && st.thumb_url && st.image) {
+      renderImageCreditCaption(roadCardsStage.querySelector("#road-event-thumb-caption"), st.image);
+    }
 
     // Wire background horizon cards click to step to that station
     roadCardsStage.querySelectorAll(".road-card.is-next-1, .road-card.is-next-2").forEach((cardEl) => {
@@ -1647,13 +1945,23 @@ export function createUI({
     const currentSt = stations[activeIndex] || stations[0];
     if (!currentSt) return;
 
-    const evYear = Number(currentSt.event_year) || 1900;
     const eras = roadData.eras || [];
-    const activeEra =
-      eras.find((e) => evYear >= e.from_year && evYear <= e.to_year) || eras[0] || null;
-    const eraCaption = activeEra
-      ? `${activeEra.from_year}–${activeEra.to_year} · ${activeEra.label}`
-      : roadData.topic?.title || t("road.historicalRoadFallback");
+    let eraCaption = roadData.topic?.title || t("road.historicalRoadFallback");
+    if (currentSt.event_year != null && eras.length > 0) {
+      const evYear = Number(currentSt.event_year);
+      const activeEra =
+        eras.find((e) => evYear >= e.from_year && evYear <= e.to_year) || eras[0] || null;
+      if (activeEra) {
+        const spanStr =
+          activeEra.from_year === activeEra.to_year
+            ? String(activeEra.from_year)
+            : `${activeEra.from_year}–${activeEra.to_year}`;
+        eraCaption =
+          activeEra.label && activeEra.label !== spanStr
+            ? `${spanStr} · ${activeEra.label}`
+            : spanStr;
+      }
+    }
 
     const bandsPieces = stations.map((st, idx) => {
       const isRead = idx < activeIndex || Boolean(visitedIndices?.has(idx));
