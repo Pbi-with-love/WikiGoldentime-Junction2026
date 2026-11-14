@@ -18,9 +18,13 @@ offers related articles to keep reading. Judges are the authors of the organizer
     user/pass `wikirag`/`wikirag`.
   - `mariadb-system-versioning-wikipedia-mariadb-1`: 127.0.0.1:3308->3306, database `wikihistory`,
     user/pass `wikihistory`/`wikihistory`. Keep it running (the organizers' time machine uses it).
-  - **Plan (spec 002):** copy `wikihistory` into the 3307 server as a second database, so one SQL
-    statement can join vectors with `FOR SYSTEM_TIME`. Until then, host and port are read per
-    database from env vars.
+  - **Merged (spec 002):** `wikihistory` (50 articles, 31,848 versions, `WITH SYSTEM VERSIONING`
+    and `INVISIBLE` `row_start`/`row_end`) now also lives on the 3307 server alongside `wikirag`
+    (both `wikirag` and `wikihistory` have `ALL PRIVILEGES ON wikihistory.*`), so one SQL
+    statement can join vectors with `FOR SYSTEM_TIME`. Container 3308 remains the source for
+    reloads; after loading full dataset M into 3308, rerun the merge in tmux with
+    `tmux new -d -s merge 'bash ~/wikimemory/db_merge.sh merge > ~/wikimemory/merge.log 2>&1 && bash ~/wikimemory/db_merge.sh verify >> ~/wikimemory/merge.log 2>&1'`
+    (and check parity anytime with `bash ~/wikimemory/db_merge.sh verify`).
 - Organizers' apps run in tmux: `app` (RAG search, 127.0.0.1:8000), `tm` (time machine,
   127.0.0.1:8001). **Never stop, restart or edit them**, nor their repos/venvs.
 - Dataset M: only 50 articles loaded (organizers' default demo); `data/dumps` holds 12 dumps, the full

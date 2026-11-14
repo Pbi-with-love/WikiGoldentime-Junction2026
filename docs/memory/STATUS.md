@@ -30,7 +30,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 
 ## Backend specs (run in this order, one worker at a time: 004/006/009/010 share src/api.js,
 ## contract.test.js and backend/ app)
-- 002-db-merge | in progress (Hydrogen) |
+- 002-db-merge | done | `scripts/db_merge.sh verify` EXIT 0 (rerun by orchestrator): 31,848 versions / 50 current / 50 list, fingerprint 68660370179281, SVT+INVISIBLE schema match; MariaDB 12.3.3 both; rerun merge 118 s; :8000/:8001 200. Note: vector+SVT join 1.9 s (first query, maybe cold index) — 006/010 must measure warm |
 - 003-umap-coords | spec ready |
 - 004-mock-flags | spec ready |
 - 005-history-stats | spec ready (adds global_month_stats) |
