@@ -155,3 +155,13 @@ test("017 cross-language compare keys exist and are non-empty in fi, sv, en", ()
     }
   }
 });
+
+test("019 image credit keys exist with expected placeholders in fi, sv, en", () => {
+  for (const code of SUPPORTED) {
+    const imgCredit = STRINGS[code]["panel.imageCredit"];
+    const commonsCredit = STRINGS[code]["panel.commonsCredit"];
+    assert.equal(typeof imgCredit, "string");
+    assert.ok(imgCredit.includes("{artist}") && imgCredit.includes("{license}"));
+    assert.equal(commonsCredit, "Wikimedia Commons");
+  }
+});

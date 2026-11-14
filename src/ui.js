@@ -203,7 +203,7 @@ export function createUI({
   const articlePanel = document.getElementById("article-panel");
   const panelThumbFigure = document.getElementById("panel-thumb-figure");
   const panelThumbImg = document.getElementById("panel-thumb-img");
-  const panelThumbCredit = document.getElementById("panel-thumb-credit");
+  const panelThumbCaption = document.getElementById("panel-thumb-caption");
   const panelTitle = document.getElementById("panel-title");
   const panelCloseBtn = document.getElementById("panel-close-btn");
   const panelLanguages = document.getElementById("panel-languages");
@@ -2607,18 +2607,16 @@ export function createUI({
       panelRoadBtn.hidden = !isRoadEligibleArticle(article);
     }
 
-    // Header image when thumb_url exists, credit link to Commons; otherwise title only
-    if (article.thumb_url && article.thumb_file) {
-      panelThumbImg.src = article.thumb_url;
+    // Header image when article.image exists; otherwise title only
+    if (article.image && article.image.thumb_url) {
+      panelThumbImg.src = article.image.thumb_url;
       panelThumbImg.alt = article.title;
-      panelThumbCredit.href = `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(
-        article.thumb_file
-      )}`;
-      panelThumbCredit.textContent = t("panel.commonsCredit", { file: article.thumb_file });
+      renderImageCreditCaption(panelThumbCaption, article.image);
       panelThumbFigure.hidden = false;
     } else {
       panelThumbFigure.hidden = true;
       panelThumbImg.src = "";
+      if (panelThumbCaption) panelThumbCaption.textContent = "";
     }
 
     panelTitle.textContent = article.title;
@@ -3035,6 +3033,64 @@ function escapeHtml(str) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function safeHttpUrl(url) {
+  if (typeof url !== "string") return null;
+  const trimmed = url.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+}
+
+function renderImageCreditCaption(captionEl, image) {
+  if (!captionEl || !image) return;
+  captionEl.textContent = "";
+
+  const filePageUrl = safeHttpUrl(image.file_page_url) || "https://commons.wikimedia.org";
+  const makeLink = (text, href, title = "") => {
+    const a = document.createElement("a");
+    a.className = "panel-thumb-credit";
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = text;
+    if (title) a.title = title;
+    return a;
+  };
+
+  const licenseText = typeof image.license === "string" ? image.license.trim() : "";
+  if (!licenseText) {
+    captionEl.appendChild(makeLink(t("panel.commonsCredit"), filePageUrl));
+    return;
+  }
+
+  const rawAttr = (
+    (typeof image.artist === "string" && image.artist.trim()) ||
+    (typeof image.credit === "string" && image.credit.trim()) ||
+    ""
+  ).trim();
+  const attrText = rawAttr
+    ? rawAttr.length > 80
+      ? `${rawAttr.slice(0, 79)}…`
+      : rawAttr
+    : t("panel.commonsCredit");
+  const attrTitle = rawAttr.length > 80 ? rawAttr : "";
+  const licenseUrl = safeHttpUrl(image.license_url);
+
+  const parts = t("panel.imageCredit").split(/(\{artist\}|\{license\})/g);
+  for (const part of parts) {
+    if (!part) continue;
+    if (part === "{artist}") {
+      captionEl.appendChild(makeLink(attrText, filePageUrl, attrTitle));
+    } else if (part === "{license}") {
+      if (licenseUrl) {
+        captionEl.appendChild(makeLink(licenseText, licenseUrl));
+      } else {
+        captionEl.appendChild(document.createTextNode(licenseText));
+      }
+    } else {
+      captionEl.appendChild(document.createTextNode(part));
+    }
+  }
 }
 
 function buildWikiOldidUrl(langCode, revId) {

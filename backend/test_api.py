@@ -7,11 +7,13 @@ import re
 import sys
 
 from fastapi.testclient import TestClient
+import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from backend import main as backend_main  # noqa: E402
 from backend.main import app  # noqa: E402
 
 ISO_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -139,6 +141,7 @@ def test_article_shape_and_errors():
         "has_history",
         "thumb_url",
         "thumb_file",
+        "image",
     }
     assert art["lang"] == "fi"
     assert art["page_id"] == 1256
@@ -155,9 +158,153 @@ def test_article_shape_and_errors():
     assert art["has_history"] is True
     assert art["thumb_url"] is None or isinstance(art["thumb_url"], str)
     assert art["thumb_file"] is None or isinstance(art["thumb_file"], str)
+    img = art["image"]
+    assert isinstance(img, dict)
+    assert set(img.keys()) == {
+        "thumb_url",
+        "file_page_url",
+        "license",
+        "license_url",
+        "artist",
+        "credit",
+    }
+    assert img["file_page_url"].startswith("https://commons.wikimedia.org/wiki/File:")
+    assert isinstance(img["license"], str) and len(img["license"]) > 0
+    assert img["license_url"] is None or isinstance(img["license_url"], str)
+    assert img["artist"] is None or isinstance(img["artist"], str)
+    assert img["credit"] is None or isinstance(img["credit"], str)
+    assert img["thumb_url"] == art["thumb_url"]
 
     assert client.get("/api/article/de/1256").status_code == 422
     assert client.get("/api/article/fi/999999999").status_code == 404
+
+
+def test_article_non_free_hidden():
+    con = backend_main._open_rag()
+    try:
+        cur = con.cursor()
+        try:
+            cur.execute(
+                "SELECT lang, page_id FROM wikirag.article_image WHERE non_free = 1 LIMIT 1"
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    finally:
+        con.close()
+
+    if row is None:
+        pytest.skip("No non_free=1 rows in article_image")
+
+    resp = client.get(f"/api/article/{row[0]}/{int(row[1])}")
+    assert resp.status_code == 200
+    art = resp.json()
+    assert art["image"] is None
+    assert art["thumb_url"] is None
+    assert art["thumb_file"] is None
+
+
+def test_article_non_free_hidden_unit(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self.description = []
+            self._rows = []
+
+        def execute(self, sql, params=()):
+            if "FROM wikirag.article a" in sql:
+                cols = [
+                    "lang",
+                    "page_id",
+                    "rev_id",
+                    "wikidata_id",
+                    "title",
+                    "url",
+                    "date_modified",
+                    "text",
+                    "has_history",
+                    "thumb_url",
+                    "thumb_file",
+                    "image_license",
+                    "image_license_url",
+                    "image_artist",
+                    "image_credit",
+                    "image_non_free",
+                ]
+                self.description = [(c,) for c in cols]
+                self._rows = [
+                    (
+                        "fi",
+                        1256,
+                        999,
+                        "Q134949",
+                        "Talvisota",
+                        "https://fi.wikipedia.org/wiki/Talvisota",
+                        "2026-01-01T00:00:00Z",
+                        "# Talvisota\n\nText",
+                        1,
+                        "https://upload.wikimedia.org/wikipedia/commons/x/y/Test.jpg",
+                        "Test.jpg",
+                        "Fair use",
+                        "https://en.wikipedia.org/wiki/Wikipedia:Non-free_content",
+                        "Photographer",
+                        "SA-kuva",
+                        1,
+                    )
+                ]
+            else:
+                self.description = [("c",)]
+                self._rows = []
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return self._rows
+
+        def close(self):
+            pass
+
+    class FakeCon:
+        def cursor(self):
+            return FakeCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backend_main, "_open_rag", lambda: FakeCon())
+    monkeypatch.setattr(backend_main.rag_common, "other_languages", lambda cur, rows: {})
+    resp = client.get("/api/article/fi/1256")
+    assert resp.status_code == 200
+    art = resp.json()
+    assert art["image"] is None
+    assert art["thumb_url"] is None
+    assert art["thumb_file"] is None
+
+
+def test_article_credit_fallback_exposed():
+    con = backend_main._open_rag()
+    try:
+        cur = con.cursor()
+        try:
+            cur.execute(
+                "SELECT lang, page_id FROM wikirag.article_image "
+                "WHERE (artist IS NULL OR artist = '') AND credit IS NOT NULL AND non_free = 0 LIMIT 1"
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    finally:
+        con.close()
+
+    if row is None:
+        pytest.skip("No artist-null credit-present rows in article_image")
+
+    resp = client.get(f"/api/article/{row[0]}/{int(row[1])}")
+    assert resp.status_code == 200
+    art = resp.json()
+    assert art["image"] is not None
+    assert art["image"]["artist"] is None
+    assert isinstance(art["image"]["credit"], str) and len(art["image"]["credit"]) > 0
 
 
 def test_global_and_article_timelines_with_gap_fill_and_404():

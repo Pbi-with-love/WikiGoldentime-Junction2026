@@ -875,14 +875,12 @@ a:focus-visible,
   color: var(--frost);
 }
 
-.panel-thumb-credit,
-#panel-thumb-credit {
+.panel-thumb-credit {
   color: var(--frost);
   text-decoration: underline;
 }
 
-.panel-thumb-credit:hover,
-#panel-thumb-credit:hover {
+.panel-thumb-credit:hover {
   color: var(--snow);
 }
 

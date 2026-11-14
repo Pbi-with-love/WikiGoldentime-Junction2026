@@ -14,6 +14,7 @@ import re
 import sys
 import threading
 from typing import Any
+import urllib.parse
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
@@ -96,7 +97,12 @@ SELECT
     a.text,
     (hs.page_id IS NOT NULL) AS has_history,
     img.thumb_url AS thumb_url,
-    img.file_name AS thumb_file
+    img.file_name AS thumb_file,
+    img.license AS image_license,
+    img.license_url AS image_license_url,
+    img.artist AS image_artist,
+    img.credit AS image_credit,
+    img.non_free AS image_non_free
 FROM wikirag.article a
 LEFT JOIN wikihistory.history_stats hs
   ON a.lang = 'fi' AND hs.page_id = a.page_id
@@ -117,7 +123,12 @@ SELECT
     a.text,
     (hs.page_id IS NOT NULL) AS has_history,
     NULL AS thumb_url,
-    NULL AS thumb_file
+    NULL AS thumb_file,
+    NULL AS image_license,
+    NULL AS image_license_url,
+    NULL AS image_artist,
+    NULL AS image_credit,
+    0 AS image_non_free
 FROM wikirag.article a
 LEFT JOIN wikihistory.history_stats hs
   ON a.lang = 'fi' AND hs.page_id = a.page_id
@@ -479,6 +490,23 @@ def get_article(lang: str, page_id: int):
 
     text = row["text"]
     words = len(text.split())
+    is_non_free = bool(row["image_non_free"])
+    if is_non_free or not row["thumb_url"] or not row["thumb_file"]:
+        thumb_url = None
+        thumb_file = None
+        image = None
+    else:
+        thumb_url = row["thumb_url"]
+        thumb_file = row["thumb_file"]
+        image = {
+            "thumb_url": thumb_url,
+            "file_page_url": "https://commons.wikimedia.org/wiki/File:"
+            + urllib.parse.quote(thumb_file),
+            "license": row["image_license"] or None,
+            "license_url": row["image_license_url"] or None,
+            "artist": row["image_artist"] or None,
+            "credit": row["image_credit"] or None,
+        }
     return {
         "lang": row["lang"],
         "page_id": int(row["page_id"]),
@@ -495,8 +523,9 @@ def get_article(lang: str, page_id: int):
         "categories": categories,
         "other_languages": other_langs,
         "has_history": bool(row["has_history"]),
-        "thumb_url": row["thumb_url"],
-        "thumb_file": row["thumb_file"],
+        "thumb_url": thumb_url,
+        "thumb_file": thumb_file,
+        "image": image,
     }
 
 

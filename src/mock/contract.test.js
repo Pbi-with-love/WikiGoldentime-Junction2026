@@ -180,6 +180,23 @@ test("GET /api/article/{lang}/{page_id} returns exact article shape with Markdow
   assert.equal(art.has_history, true);
   assert.ok(art.thumb_url === null || typeof art.thumb_url === "string");
   assert.ok(art.thumb_file === null || typeof art.thumb_file === "string");
+  assert.ok(art.image !== null && typeof art.image === "object" && !Array.isArray(art.image));
+  assert.deepEqual(Object.keys(art.image).sort(), [
+    "artist",
+    "credit",
+    "file_page_url",
+    "license",
+    "license_url",
+    "thumb_url",
+  ]);
+  assert.equal(typeof art.image.thumb_url, "string");
+  assert.equal(art.image.thumb_url, art.thumb_url);
+  assert.equal(typeof art.image.file_page_url, "string");
+  assert.ok(art.image.file_page_url.startsWith("https://commons.wikimedia.org/wiki/File:"));
+  assert.ok(art.image.license === null || typeof art.image.license === "string");
+  assert.ok(art.image.license_url === null || typeof art.image.license_url === "string");
+  assert.ok(art.image.artist === null || typeof art.image.artist === "string");
+  assert.ok(art.image.credit === null || typeof art.image.credit === "string");
 });
 
 test("GET /api/timeline and GET /api/timeline/{page_id} match calibrated versions and 404 rules", async () => {

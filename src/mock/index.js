@@ -250,6 +250,18 @@ export async function mockGetArticle(lang, pageId) {
     has_history: star.has_history,
     thumb_url: thumbInfo ? thumbInfo.thumb_url : null,
     thumb_file: thumbInfo ? thumbInfo.thumb_file : null,
+    image: thumbInfo
+      ? {
+          thumb_url: thumbInfo.thumb_url,
+          file_page_url: `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(
+            thumbInfo.thumb_file
+          )}`,
+          license: "CC BY-SA 4.0",
+          license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+          artist: "[mock] Kaamos illustration",
+          credit: null,
+        }
+      : null,
   };
 }
 

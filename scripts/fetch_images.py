@@ -32,6 +32,9 @@ DEFAULT_UA = (
     "python-urllib/3"
 )
 DEFAULT_PROGRESS_FILE = os.path.expanduser("~/wikimemory/fetch_images.progress.json")
+DEFAULT_CREDIT_PROGRESS_FILE = os.path.expanduser(
+    "~/wikimemory/fetch_images_credit_missing.progress.json"
+)
 LANGS = ("en", "fi", "sv")
 BATCH_SIZE = 50
 MIN_REQUEST_INTERVAL_S = 1.05
@@ -45,6 +48,7 @@ MAX_THUMB_URL_LEN = 1024
 MAX_LICENSE_LEN = 64
 MAX_LICENSE_URL_LEN = 512
 MAX_ARTIST_LEN = 512
+MAX_CREDIT_LEN = 200
 NON_FREE_LICENSE_RE = re.compile(r"non-free|fair use", re.IGNORECASE)
 
 ALLOWED_THUMB_PREFIXES = (
@@ -61,6 +65,7 @@ CREATE TABLE IF NOT EXISTS article_image (
   license VARCHAR(64) NULL,
   license_url VARCHAR(512) NULL,
   artist VARCHAR(512) NULL,
+  credit VARCHAR(200) NULL,
   non_free TINYINT(1) NOT NULL DEFAULT 0,
   credit_checked_at DATETIME NULL,
   PRIMARY KEY (lang, page_id)
@@ -69,15 +74,16 @@ CREATE TABLE IF NOT EXISTS article_image (
 
 UPSERT_SQL = """
 INSERT INTO article_image (
-  lang, page_id, file_name, thumb_url, license, license_url, artist, non_free, credit_checked_at
+  lang, page_id, file_name, thumb_url, license, license_url, artist, credit, non_free, credit_checked_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
 ON DUPLICATE KEY UPDATE
   file_name = VALUES(file_name),
   thumb_url = VALUES(thumb_url),
   license = VALUES(license),
   license_url = VALUES(license_url),
   artist = VALUES(artist),
+  credit = VALUES(credit),
   non_free = VALUES(non_free),
   credit_checked_at = UTC_TIMESTAMP()
 """
@@ -87,9 +93,17 @@ UPDATE article_image
 SET license = ?,
     license_url = ?,
     artist = ?,
+    credit = ?,
     non_free = ?,
     credit_checked_at = UTC_TIMESTAMP()
 WHERE file_name = ?
+"""
+
+UPDATE_MISSING_ARTIST_CREDIT_SQL = """
+UPDATE article_image
+SET credit = ?
+WHERE file_name = ?
+  AND (artist IS NULL OR artist = '')
 """
 
 MARK_MISSING_CREDITS_SQL = """
@@ -172,8 +186,8 @@ class CommonsMeta:
     license: str | None
     license_url: str | None
     artist: str | None
+    credit: str | None = None
     non_free: bool = False
-    has_credit: bool = False
 
 
 @dataclass(frozen=True)
@@ -533,13 +547,13 @@ def parse_commons_imageinfo_responses(
         lic_url = clean_license_url((ext.get("LicenseUrl") or {}).get("value"))
         artist = clean_metadata_text((ext.get("Artist") or {}).get("value"), MAX_ARTIST_LEN)
         non_free = parse_non_free((ext.get("NonFree") or {}).get("value"), lic)
-        has_credit = clean_metadata_text((ext.get("Credit") or {}).get("value"), MAX_ARTIST_LEN) is not None
+        credit = clean_metadata_text((ext.get("Credit") or {}).get("value"), MAX_CREDIT_LEN)
         results[name] = CommonsMeta(
             license=lic,
             license_url=lic_url,
             artist=artist,
+            credit=credit,
             non_free=non_free,
-            has_credit=has_credit,
         )
     return results
 
@@ -567,6 +581,7 @@ def _split_commons_chunks(file_names: list[str]) -> list[list[str]]:
 def fetch_commons_chunk(
     client: PoliteClient,
     chunk: list[str],
+    metadata_filter: str = "LicenseShortName|LicenseUrl|Artist|Credit|NonFree",
 ) -> dict[str, CommonsMeta | None]:
     """Fetch Commons extmetadata for one safe-sized chunk of file names."""
     base_url = "https://commons.wikimedia.org/w/api.php"
@@ -574,7 +589,7 @@ def fetch_commons_chunk(
         "action": "query",
         "prop": "imageinfo",
         "iiprop": "extmetadata",
-        "iiextmetadatafilter": "LicenseShortName|LicenseUrl|Artist|Credit|NonFree",
+        "iiextmetadatafilter": metadata_filter,
         "titles": "|".join(f"File:{name}" for name in chunk),
         "format": "json",
         "formatversion": "2",
@@ -635,6 +650,30 @@ def save_progress_atomic(path: str, progress: dict[str, int]) -> None:
     tmp_path = f"{path}.tmp.{os.getpid()}"
     with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(progress, fh, sort_keys=True, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, path)
+
+
+def load_credit_progress(path: str) -> str:
+    """Load last completed file_name for --credits-only --missing-artist."""
+    if not os.path.isfile(path):
+        return ""
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("last_file_name") or "")
+
+
+def save_credit_progress_atomic(path: str, last_file_name: str) -> None:
+    """Atomically persist last completed file_name for --credits-only --missing-artist."""
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump({"last_file_name": last_file_name}, fh, sort_keys=True, indent=2)
         fh.write("\n")
         fh.flush()
         os.fsync(fh.fileno())
@@ -822,6 +861,7 @@ def run_self_test() -> int:
     assert meta_maxim.license == "Public domain"
     assert meta_maxim.license_url == "https://creativecommons.org/publicdomain/mark/1.0/"
     assert meta_maxim.artist == "Unknown & Co <SA-kuva>", f"Got artist={meta_maxim.artist!r}"
+    assert meta_maxim.credit is None
     assert meta_maxim.non_free is False
 
     meta_satuli = parsed_commons["Antti_Satuli.jpg"]
@@ -829,8 +869,8 @@ def run_self_test() -> int:
     assert meta_satuli.license is None
     assert meta_satuli.license_url is None
     assert meta_satuli.artist is None
+    assert meta_satuli.credit == "SA-kuva"
     assert meta_satuli.non_free is True
-    assert meta_satuli.has_credit is True
 
     meta_fair_use = parsed_commons["Fair_use_sample.jpg"]
     assert meta_fair_use is not None
@@ -844,6 +884,9 @@ def run_self_test() -> int:
     long_html = "<p>" + ("A" * 600) + "</p>"
     cleaned_long = clean_metadata_text(long_html, MAX_ARTIST_LEN)
     assert cleaned_long is not None and len(cleaned_long) == 512
+    cleaned_credit = clean_metadata_text("<span>" + ("C" * 260) + "</span>", MAX_CREDIT_LEN)
+    assert cleaned_credit is not None and len(cleaned_credit) == 200
+    assert clean_metadata_text("<div><b>SA-kuva</b> &amp; Arkisto</div>", MAX_CREDIT_LEN) == "SA-kuva & Arkisto"
 
     assert clean_license_url("//creativecommons.org/licenses/by/4.0/") == (
         "https://creativecommons.org/licenses/by/4.0/"
@@ -894,6 +937,11 @@ def parse_args() -> argparse.Namespace:
         help="Backfill Commons credits for article_image rows where credit_checked_at IS NULL.",
     )
     parser.add_argument(
+        "--missing-artist",
+        action="store_true",
+        help="With --credits-only, fetch only Credit (max 200 chars) for rows where artist IS NULL OR artist = ''.",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run offline assertions on embedded sample JSON and exit.",
@@ -904,6 +952,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-password", default=os.environ.get("DB_PASSWORD", "wikirag"))
     parser.add_argument("--db-name", default=os.environ.get("DB_NAME", "wikirag"))
     parser.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
+    parser.add_argument("--credit-progress-file", default=DEFAULT_CREDIT_PROGRESS_FILE)
     return parser.parse_args()
 
 
@@ -950,7 +999,7 @@ def run_credits_only(
     for chunk_idx, chunk in enumerate(chunks, start=1):
         try:
             parsed = fetch_commons_chunk(client, chunk)
-            present_rows: list[tuple[str | None, str | None, str | None, int, str]] = []
+            present_rows: list[tuple[str | None, str | None, str | None, str | None, int, str]] = []
             missing_rows: list[tuple[str]] = []
 
             for name in chunk:
@@ -962,13 +1011,14 @@ def run_credits_only(
                 if meta.non_free:
                     non_free_cnt += 1
                     print(f"  non_free file: {name} (license={meta.license!r})", flush=True)
-                if meta.artist is None and meta.has_credit:
+                if meta.artist is None and meta.credit is not None:
                     artist_null_credit_cnt += 1
                 present_rows.append(
                     (
                         meta.license,
                         meta.license_url,
                         meta.artist,
+                        meta.credit,
                         1 if meta.non_free else 0,
                         name,
                     )
@@ -1017,6 +1067,104 @@ def run_credits_only(
     return 1 if failed_chunks > 0 else 0
 
 
+def run_missing_artist_credits(
+    con,
+    client: PoliteClient,
+    *,
+    restart: bool,
+    limit: int | None,
+    progress_file: str,
+) -> int:
+    """Resumable --credits-only mode: fetch extmetadata Credit only for rows missing artist."""
+    t_start = time.monotonic()
+    req_start = client.request_count
+
+    if restart:
+        save_credit_progress_atomic(progress_file, "")
+    last_done = load_credit_progress(progress_file)
+
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "SELECT DISTINCT file_name FROM article_image "
+            "WHERE (artist IS NULL OR artist = '') ORDER BY file_name"
+        )
+        all_files = [str(row[0]) for row in cur.fetchall()]
+    finally:
+        cur.close()
+
+    file_names = [f for f in all_files if f > last_done]
+    if limit is not None:
+        file_names = file_names[:limit]
+
+    chunks = _split_commons_chunks(file_names)
+    total_chunks = len(chunks)
+    rows_updated = 0
+    files_with_credit = 0
+    missing_cnt = 0
+    failed_chunks = 0
+    had_failure = False
+
+    print(
+        f"[credits-missing-artist] starting: total_missing_artist_files={len(all_files)} "
+        f"pending_files={len(file_names)} chunks={total_chunks} resume_after={last_done!r}",
+        flush=True,
+    )
+
+    for chunk_idx, chunk in enumerate(chunks, start=1):
+        try:
+            parsed = fetch_commons_chunk(client, chunk, metadata_filter="Credit")
+            update_rows: list[tuple[str | None, str]] = []
+            for name in chunk:
+                meta = parsed.get(name)
+                if meta is None:
+                    missing_cnt += 1
+                    continue
+                if meta.credit is not None:
+                    files_with_credit += 1
+                update_rows.append((meta.credit, name))
+
+            if update_rows:
+                wcur = con.cursor()
+                try:
+                    wcur.executemany(UPDATE_MISSING_ARTIST_CREDIT_SQL, update_rows)
+                    if wcur.rowcount > 0:
+                        rows_updated += wcur.rowcount
+                    con.commit()
+                finally:
+                    wcur.close()
+
+            if not had_failure:
+                save_credit_progress_atomic(progress_file, chunk[-1])
+
+            if chunk_idx % 20 == 0 or chunk_idx == total_chunks:
+                print(
+                    f"[credits-missing-artist] chunk {chunk_idx}/{total_chunks}: "
+                    f"rows_updated={rows_updated} files_with_credit={files_with_credit} "
+                    f"missing_on_commons={missing_cnt} requests={client.request_count - req_start}",
+                    flush=True,
+                )
+        except Exception as exc:
+            con.rollback()
+            failed_chunks += 1
+            had_failure = True
+            print(
+                f"FAILED CHUNK [credits-missing-artist] chunk {chunk_idx}/{total_chunks} "
+                f"files={chunk[0]}..{chunk[-1]} (n={len(chunk)}): {exc}",
+                flush=True,
+            )
+
+    elapsed_s = time.monotonic() - t_start
+    total_requests = client.request_count - req_start
+    print(
+        f"SUMMARY credits_missing_artist files={len(file_names)} requests={total_requests} "
+        f"rows_updated={rows_updated} files_with_credit={files_with_credit} "
+        f"missing_on_commons={missing_cnt} failed_chunks={failed_chunks} elapsed_s={elapsed_s:.1f}",
+        flush=True,
+    )
+    return 1 if failed_chunks > 0 else 0
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -1033,6 +1181,10 @@ def main() -> int:
         print("--limit must be >= 0", file=sys.stderr)
         return 2
 
+    if args.missing_artist and not args.credits_only:
+        print("--missing-artist requires --credits-only", file=sys.stderr)
+        return 2
+
     user_agent = os.environ.get("WIKIMEDIA_UA") or DEFAULT_UA
     print(f"User-Agent: {user_agent}", flush=True)
 
@@ -1047,6 +1199,14 @@ def main() -> int:
 
     if args.credits_only:
         try:
+            if args.missing_artist:
+                return run_missing_artist_credits(
+                    con,
+                    client,
+                    restart=args.restart,
+                    limit=args.limit,
+                    progress_file=args.credit_progress_file,
+                )
             return run_credits_only(
                 con,
                 client,
@@ -1114,7 +1274,7 @@ def main() -> int:
                 batch_ids = pending_ids[offset : offset + BATCH_SIZE]
                 try:
                     pi_res = fetch_pageimages_batch(client, lang, batch_ids)
-                    batch_rows: list[tuple[str, int, str, str, str | None, str | None, str | None, int]] = []
+                    batch_rows: list[tuple[str, int, str, str, str | None, str | None, str | None, str | None, int]] = []
                     batch_dropped = pi_res.non_commons_dropped
 
                     if pi_res.candidates:
@@ -1137,6 +1297,7 @@ def main() -> int:
                                     meta.license,
                                     meta.license_url,
                                     meta.artist,
+                                    meta.credit,
                                     1 if meta.non_free else 0,
                                 )
                             )
