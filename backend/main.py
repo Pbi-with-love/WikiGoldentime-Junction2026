@@ -59,12 +59,15 @@ SELECT
     CAST(
         NULLIF(
             REGEXP_SUBSTR(
-                IF(LOCATE('\n', a.text) > 0, SUBSTRING(a.text, LOCATE('\n', a.text) + 1, 1000), ''),
+                -- lead only: after the first newline, up to the first "## " heading (spec 023-B)
+                IF(LOCATE('\n', a.text) > 0,
+                   SUBSTRING_INDEX(SUBSTRING(a.text, LOCATE('\n', a.text) + 1), '\n## ', 1), ''),
                 '\\b(1[0-9]{3}|20[0-2][0-9])\\b'
             ),
             ''
         ) AS UNSIGNED
     ) AS event_year,
+    YEAR(ac.created_at) AS created_year,
     g.lat,
     g.lon
 FROM wikirag.article a
@@ -84,6 +87,8 @@ LEFT JOIN (
   ON fi_cat.page_id = IF(a.lang = 'fi', a.page_id, fi.page_id)
 LEFT JOIN wikihistory.history_stats hs
   ON a.lang = 'fi' AND hs.page_id = a.page_id
+LEFT JOIN wikirag.article_created ac
+  ON ac.lang = a.lang AND ac.page_id = a.page_id
 LEFT JOIN wikirag.article_geo g
   ON g.wikidata_id = a.wikidata_id
 ORDER BY a.lang, a.page_id
@@ -259,6 +264,7 @@ def _build_stars_payload() -> bytes:
                     has_history,
                     first_edit_year,
                     event_year,
+                    created_year,
                     lat,
                     lon,
                 ) = row
@@ -280,6 +286,7 @@ def _build_stars_payload() -> bytes:
                         if hist and first_edit_year is not None
                         else None,
                         "event_year": int(event_year) if event_year is not None else None,
+                        "created_year": int(created_year) if created_year is not None else None,
                         "lat": float(lat) if lat is not None else None,
                         "lon": float(lon) if lon is not None else None,
                     }

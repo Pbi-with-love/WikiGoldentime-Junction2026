@@ -89,6 +89,8 @@ test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim exa
       assert.equal(s.first_edit_year, null, "first_edit_year must be null unless has_history");
     }
 
+    assert.ok(s.created_year === null || (s.created_year >= 2001 && s.created_year <= 2026), "created_year 2001-2026 or null");
+
     if (s.wikidata_id === null) {
       nullWikidata++;
     } else {

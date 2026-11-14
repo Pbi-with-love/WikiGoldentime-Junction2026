@@ -63,6 +63,8 @@ export async function mockGetStars() {
     has_history: s.has_history,
     first_edit_year: s.first_edit_year,
     event_year: s.event_year,
+    // [mock] plausible creation year: first edit if known, else a deterministic 2001-2025 spread
+    created_year: s.first_edit_year ?? 2001 + (s.page_id % 25),
     lat: s.lat,
     lon: s.lon,
   }));

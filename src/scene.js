@@ -81,18 +81,20 @@ const VERTEX_SHADER = /* glsl */ `
     float vis = 1.0;
     float pointSize = aSize * (285.0 / dist) * uPixelRatio;
 
+    // Every star is born in its article creation year (spec 023); history stars keep the flare + larger size.
+    float birth = firstEditYear - 0.80 + aSubYear * 0.78;
+    float yearVis = smoothstep(birth - 0.28, birth + 0.02, uYear);
+    float born = mix(yearVis, 1.0, uIgnoreYearSlider);
+
+    if (born <= 0.001 && aHighlight < 0.5 && aRoadMember < 0.5) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      vAlpha = 0.0;
+      return;
+    }
+
     if (aHasHistory > 0.5) {
-      float birth = firstEditYear - 0.80 + aSubYear * 0.78;
-      float yearVis = smoothstep(birth - 0.28, birth + 0.02, uYear);
-      vis = mix(yearVis, 1.0, uIgnoreYearSlider);
-
-      if (vis <= 0.001 && aHighlight < 0.5 && aRoadMember < 0.5) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        gl_PointSize = 0.0;
-        vAlpha = 0.0;
-        return;
-      }
-
+      vis = born;
       pointSize = max(pointSize * 1.95, 6.2 * uPixelRatio);
 
       if (uReducedMotion < 0.5 && uIgnoreYearSlider < 0.5) {
@@ -101,7 +103,7 @@ const VERTEX_SHADER = /* glsl */ `
         pointSize *= (1.0 + flare * 0.85);
       }
     } else {
-      vis = 0.42;
+      vis = 0.42 * born;
       pointSize *= 0.88;
     }
 
@@ -531,7 +533,7 @@ export function createGalaxyScene({
     sizes[i] = 0.40 + Math.pow(lenFactor, 1.6) * 1.65;
 
     hasHistoryArr[i] = s.has_history && s.first_edit_year !== null ? 1.0 : 0.0;
-    firstEditYears[i] = s.first_edit_year !== null ? s.first_edit_year : 2003;
+    firstEditYears[i] = s.created_year ?? s.first_edit_year ?? 2001;
     subYears[i] = ((i * 2654435761) >>> 0) / 4294967296;
     phases[i] = (i % 628) * 0.01;
     editWarYearsByIndex[i] = getEditWarYearsForStar(s);
@@ -559,7 +561,7 @@ export function createGalaxyScene({
 
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      uYear: { value: reducedMotion ? 2026.0 : 2003.0 },
+      uYear: { value: reducedMotion ? 2026.0 : 2001.0 },
       uTime: { value: 0 },
       uPixelRatio: { value: pixelRatio },
       uReducedMotion: { value: reducedMotion ? 1.0 : 0.0 },
@@ -703,7 +705,7 @@ export function createGalaxyScene({
 
   // State tracking
   let currentLens = "meaning"; // "meaning" | "history" | "geography"
-  let currentYearFloat = reducedMotion ? 2026.0 : 2003.0;
+  let currentYearFloat = reducedMotion ? 2026.0 : 2001.0;
   let lastEditWarYearInt = -1;
   let selectedStar = null;
   let searchStars = [];
@@ -1090,8 +1092,8 @@ export function createGalaxyScene({
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 12, 60);
     } else if (lensName === "geography") {
-      glideTargetPos.set(-1.5, 0, 0);
-      glideCameraPos.set(-1.5, -6, 54);
+      glideTargetPos.set(-1.5, -5, 0);
+      glideCameraPos.set(-1.5, -11, Math.min(180, Math.max(54, 71 / camera.aspect))); // fov 50: fit the ~66-unit-wide map + unlocated cluster
     } else {
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 6, 62);
@@ -1963,8 +1965,8 @@ export function createGalaxyScene({
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 12, 60);
     } else if (currentLens === "geography") {
-      glideTargetPos.set(-1.5, 0, 0);
-      glideCameraPos.set(-1.5, -6, 54);
+      glideTargetPos.set(-1.5, -5, 0);
+      glideCameraPos.set(-1.5, -11, Math.min(180, Math.max(54, 71 / camera.aspect))); // fov 50: fit the ~66-unit-wide map + unlocated cluster
     } else {
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 6, 62);
@@ -2192,12 +2194,8 @@ export function createGalaxyScene({
       const hit = hits[i];
       const star = stars[hit.index];
       if (!star) continue;
-      if (
-        currentLens === "meaning" &&
-        star.has_history &&
-        star.first_edit_year &&
-        star.first_edit_year > maxYear
-      ) {
+      const born = star.created_year ?? star.first_edit_year;
+      if (born && born > maxYear) {
         continue;
       }
       const historyPriority = star.has_history ? -0.15 : 0;

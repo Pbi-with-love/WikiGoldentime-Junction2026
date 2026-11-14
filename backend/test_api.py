@@ -90,6 +90,7 @@ def test_stars_shape_counts_and_gzip():
         "has_history",
         "first_edit_year",
         "event_year",
+        "created_year",
         "lat",
         "lon",
     }
@@ -104,6 +105,7 @@ def test_stars_shape_counts_and_gzip():
             assert isinstance(row["first_edit_year"], int)
         else:
             assert row["first_edit_year"] is None
+        assert row["created_year"] is None or 2001 <= row["created_year"] <= 2026
         assert (row["lat"] is None) == (row["lon"] is None)
         if row["lat"] is not None:
             located += 1
