@@ -10,98 +10,74 @@ system-versioned `wikihistory` table with 862,076 real revisions, read with
 `FOR SYSTEM_TIME AS OF`, shows what the article said in each year. Every LLM output is grounded in
 the text it was given and is cached in MariaDB, so the demo never waits for the model.
 
-## Demo script (about 5 minutes)
+## Demo script (3.5 minutes, final)
 
-Labels below are the real button names on the deployed build (checked in dry run 2, see
-`docs/memory/research/demo-dryrun-2.md`). Start in the **English** UI (`English` button, top right).
-**Before going on stage:** open the app, wait about 10 s for the intro sweep of the time slider to end
-(clicks during the sweep can show the wrong year), and pre-run steps 3, 5 and 7 once.
+Labels are the real button names on the deployed build, checked in dry run 3
+(`docs/memory/research/demo-dryrun-3.md`, bundles `index-zLNeP6kO.js` and `index-BVyARc13.js`).
+Start in the **English** UI (`English`, top right). Times in brackets are speaking time.
 
-1. **Galaxy (20 s).** Open the app. Say: "Each star is one article. Colour shows the language, and a
-   red ring marks an article that had an edit war. Position comes from UMAP over the bge-m3 vectors."
-   Drag to orbit, then move the time slider (2003–2026, "Edits per month"). *After spec 023 Part B is
-   deployed:* the slider starts in 2001 and stars appear in the year their article was created.
-   Click any star: four curved **memory threads** fly from it to its neighbours (similar article, the
-   article before / after in time), and the article panel opens with its image and credit line
-   ("Image: …, licence"; fi "Kuva:", sv "Bild:").
-2. **Search (15 s).** Type `talvisota`, press **Search** ("20 matching articles"). Pick *Talvisota*
-   (fi 1256; in the English UI it is the second row, after *Vinterkriget*). Say: "Search runs on
-   MariaDB vector search. The 'also in' chips show the same article in the other languages" (Talvisota:
-   `sv`, `en`).
-3. **Ask, the hero question (60 s).** Type `How did the Winter War end?` (or the chip with the same
-   text) and press **Ask** (cached, under 1 s). Say: "The answer cites its sources. Under it, 'This
-   answer changed 3 times' is a timeline of 4 milestones: 2003–2004, 2005–2005, 2006–2020, 2021–2026."
-   Point at the **2006–2020** card. Its face already shows
-   **"Edited by Whiskey~fiwiki on 7 Nov 2006 oldid=1862876"** (the `oldid=2114325` under it is just the
-   last edit of that period):
-   - 2003: the peace treaty is signed on "13 March".
-   - 2005: the article is rewritten (rev 590107, Kahkonen).
-   - 2006: the text becomes "12 March … taking effect the next day", **changed by** rev 1862876, user
-     Whiskey~fiwiki. We checked by hand that this is the one real date change. The 2004 flips and the
-     removals in 2005–2010 were vandalism, reverted within 1–2 minutes.
-   - 2021: Tridon1971 adds sources (rev 20199251); the answer now says "the evening of 12 March".
-   Click the card: the answer as of that period, each fact with its Finnish source sentence, and the
-   word diff against today. Click `oldid=1862876` to open that exact revision on Wikipedia. Say: "Each
-   period's answer is built from `FOR SYSTEM_TIME AS OF` text, not from today's article." Point at
-   **Memory threads from Talvisota** under the answer (real neighbours: Talvisodan tausta, Jatkosota,
-   Välirauha, Suomen sota). Optional: switch to **Suomi** and ask `Miten talvisota päättyi?`. The same
-   2006 edit appears ("Muokannut Whiskey~fiwiki (7.11.2006)"), with 2006–2010 and 2011–2026 periods.
-   The en question gives the same milestones in the fi, sv and en UI.
-4. **A new question, live (30 s, optional).** Ask something not cached, e.g. `When was Matti Haapoja
-   born?`. The panel shows "Preparing the answer from Wikipedia's history…" with the closest passage
-   at once, then "Translating answer into English…"; the answer arrives by itself after about 25 s.
-   Say: "New questions are answered live from the retrieved text and then cached in MariaDB." Talk
-   through the wait; do not click.
-5. **Road (40 s).** Open *Talvisota* and click **See as a road** (or the **Talvitie: Talvisota** chip).
-   Say: "13 stations around this article, 1808–1944, picked by vector similarity and shared Wikipedia
-   categories." Each card shows why it is there ("Similar (77%)" or "shared category: …"), the real
-   lead, and its history ("Added 2004 · changed 796 times · 127 reverts · 19 disputes"). Use
-   **Next** / **Previous**, then **Back to the sky**. Another road: *Hallin Janne* (fi 375415), 13
-   Finnish criminals 1800–2001. The three islands in the sky (Talvisota, Suomen sisällissota, Suomen
-   suuriruhtinaskunta) open the same kind of road; the third one is built from a category.
-6. **Summarize (45 s).** Switch the UI to **Suomi** first (the language buttons are hidden while a
-   summary is open). Open *Talvisota*, click **Tiivistä** (Summarize). Say: "One card per section,
-   13 in all. Each fact keeps its exact source sentence. The faded cards are **ghost sections**: 5
-   sections that existed in the past and were later removed." Use **Seuraava** (Next) to reach
-   "Osio 5 / 13" *Moskovan rauha* (the first three Next steps go through ghost cards). Point at
-   "muokattu uudelleen 14 kertaa" (rewritten 14 times): the section's own edit history, precomputed
-   in SQL.
-7. **Cross-language compare (30 s).** On the same card: "Myös ruotsinkielisessä Wikipediassa" (Also in
-   Swedish Wikipedia) with the matching Swedish passage, section *Fredsavtalet*. Point only at the
-   Swedish passage (the English one below it, *Foreign support*, is a weak match). Say: "For each
-   Finnish section we look for the closest Swedish and English passage with vector distance. A section
-   with no close passage is marked 'Only in Finnish Wikipedia'." Then tell the treaty story from our
-   research (an observation, not a verdict):
-   - fi was corrected in 2006 (rev 1862876): signed "in the evening of 12 March", fighting ended the
-     next day.
-   - The sv and en **lead sentences** still put the end of the war / the treaty on 13 March 1940,
-     while their own body text says the treaty was signed on 12 March.
-   - All three agree on the facts in the body: signed 12 March, fighting ended 13 March at 11
-     (Helsinki time). Only fi says "evening".
-8. **Language (30 s).** Click **Takaisin taivaalle** (Back to the sky), switch to **Svenska**, open
-   *Talvisota* and click **Sammanfatta**. Say: "In Swedish we show the **native** Swedish article,
-   *Vinterkriget*, not a translation: 'Sammanfattning av artikeln i svenskspråkiga Wikipedia', 6
-   avsnitt." Click **Nästa** 7 times to the card "Redigeringshistorik från finskspråkiga Wikipedia"
-   (Edit history of Finnish Wikipedia): the Finnish section history ("omskriven 14 gånger" …). Then
-   switch to **English**: the native *Winter War* ("Summary of the English Wikipedia article", 9
-   sections, all in English; the history card is card 10). Say: "Native article first. Articles
-   without a Swedish or English sibling get a translation of the Finnish summary, labelled
-   'Machine-translated from Finnish Wikipedia'."
-9. **Through time (40 s).** **Back to the sky**, open *Talvisota*, click the **Through Time** tab,
-   then **As of 2006** (about 2 s to load). The card shows "2006 · Edited by Höyhens on 29 Dec 2006 ·
-   oldid=2114325" and the article text as of that date. Scroll to **Word diff against today**. Say:
-   "This is a plain `SELECT ... FOR SYSTEM_TIME AS OF` on the system-versioned table, and each version
-   links back to Wikipedia's `?oldid=`."
-10. **Edit wars (20 s).** Top of the same tab: "2,143 versions · 328 reverts · 88 disputes · 7
-    edit-war months", and the monthly bars (hover one for "edits, disputes"). Say: "Across dataset M
-    there are 45,668 reverts, 15,633 disputes and 890 edit-war months. All of it is precomputed in SQL
-    tables, never computed per request."
-11. **Geography (15 s).** Close the panel, click **Geography**: the stars move onto a map of Finland
-    (Rovaniemi, Oulu, Vaasa, Tampere, Viipuri); stars without coordinates gather in "Unlocated
-    articles". Say: "7,186 of the 29,460 stars have Wikidata coordinates." (Until spec 023 Part B is
-    deployed, the south coast sits under the timeline bar; do not linger there.)
-12. **Close (15 s).** Say: "In short: vectors find the passage, system versioning shows how it
-    changed, and MariaDB stores all of it, including the LLM cache."
+**Warm-up, 5 minutes before going on stage** (laptop at 1280×720 or larger, tunnel open):
+1. Open the app and wait 10 s until the slider reads **2026** (or click once anywhere: the intro
+   sweep then jumps to 2026).
+2. Click the chip **How did the Winter War end?**, click the **2006–2020** card (warms the diff,
+   ~1.4 s cold), then **Close**.
+3. Search `talvisota`, open *Talvisota*, click **Through Time** -> **As of 2006** (warms AS OF,
+   ~2.5 s cold), then **See as a road** and **Back to the sky**.
+4. Click **Suomi**, open *Talvisota*, **Tiivistä**, then **Takaisin taivaalle**, click **English**.
+5. Reload the page and wait for **2026** again. Keep a second tab with the same state as backup.
+
+1. **Galaxy and time (25 s).** Say: "Each star is one Wikipedia article about Finnish history, in
+   Finnish, Swedish and English: 29,460 stars. Colour is the language; red marks an edit war." Click
+   the slider and press **Home**: **2001**, about 70 stars. Press **→** a few times (2004: ~2,000;
+   2010: ~14,000), then **End** (2026: all). Say: "Stars are born in the year their article was
+   created; the bars are edits per month."
+2. **Ask, the hero (60 s).** Click the chip **How did the Winter War end?** (instant). Say: "The
+   answer cites its sources ('Based on English, Finnish Wikipedia'). Below it, **This answer changed 3
+   times**: 2003–2004, 2005–2005, **2006–2020**, 2021–2026." Point at the 2006–2020 card face:
+   **"Edited by Whiskey~fiwiki on 7 Nov 2006 oldid=1862876"**. Say: "In November 2006 one editor
+   changed the treaty date in Finnish Wikipedia: signed the evening of 12 March, fighting ended the
+   next day. Before that it said 13 March." Click the card: each fact with its Finnish source
+   sentence, then **Word diff against today** (~1 s). Say: "Every period is built from
+   `FOR SYSTEM_TIME AS OF` text, not from today's article; `oldid` links to that exact revision."
+   Note: today's English answer still says "signed on 13 March" (the English lead says so). If asked,
+   that is the story: the languages disagree.
+3. **Threads and road (30 s).** Scroll to **Memory threads from Talvisota** (Talvisodan tausta ≈ 91 %,
+   Jatkosota 1941 →, Välirauha ≈ 84 %, ← 1808 Suomen sota). Click **Close**, click the chip
+   **Talvitie: Talvisota** (0.4 s): "13 historical milestones · 1808–1944". Say: "Stations are picked
+   by vector similarity and shared categories; each card shows why ('Similar (77%)') and its history
+   ('Added 2004 · changed 796 times', '127 reverts · 19 disputes')." Click **Next** twice, then
+   **Back to the sky**.
+4. **Summary and cross-language compare (40 s).** Click **Suomi**, search `talvisota` (**Hae**),
+   open *Talvisota*, click **Tiivistä**: "13 osiota · 35 min → 2 min". Say: "One card per section,
+   each fact with its source sentence; faded cards are sections that were deleted in the past."
+   Click **Seuraava** 8 times to **Osio 5 / 13** *Moskovan rauha* ("muokattu uudelleen 14 kertaa").
+   Point at **Myös ruotsinkielisessä Wikipediassa** (section *Fredsavtalet*) only. Say: "For each
+   Finnish section we find the closest Swedish and English passage with vector distance." Do not
+   point at the English passage under it (*Foreign support*, a weak match until spec 027 is deployed).
+   Click **Takaisin taivaalle**, then **English**.
+5. **Through time and edit wars (30 s).** Search `talvisota`, open *Talvisota*, click **Through
+   Time**: "2,143 versions · 328 reverts · 88 disputes · 7 edit-war months". Click **As of 2006**
+   (~2.5 s; talk through it): "2006 · Edited by Höyhens on 29 Dec 2006 · oldid=2114325", and the
+   slider and galaxy move to 2006 too. Say: "A plain `SELECT … FOR SYSTEM_TIME AS OF` on the
+   system-versioned table, 862,076 real revisions."
+6. **Geography (10 s).** **Close** the panel and the search list, click **Geography** (~3 s
+   animation): the map of Finland (Rovaniemi, Oulu, Vaasa, Tampere, Turku, Helsinki, Viipuri) and
+   "Unlocated articles". Say: "7,186 stars have Wikidata coordinates."
+7. **Close (15 s).** Say: "Vectors find the passage, system versioning shows how it changed, and
+   MariaDB stores all of it, including every LLM answer as a cache."
+
+**Backups.**
+- A step is slow (> 3 s): keep talking, do not click again. Through Time and the 2006 card are the
+  slow ones; the warm-up makes them faster.
+- Something breaks: reload (state is lost), wait for 2026, and go to the next step.
+- Time left over: ask `Who was convicted for the Vastaamo data breach?` (cached since dry run 3,
+  instant): a 2020 article; the slider jumps to its year, and the answer changed with the April 2024
+  sentencing (Porvari, oldid=22360610). A truly new question takes ~25 s ("Preparing the answer from
+  Wikipedia's history…", then "Translating answer into English…") and arrives by itself; only do it
+  if there is time, and do not click while it runs.
+- Language question from judges: click **Svenska**, the chip question shows "Maskinöversatt från
+  engelska" and "Detta svar ändrades 3 gånger"; in Finnish ask `Miten talvisota päättyi?`
+  ("Perustuu Wikipedia-artikkeleihin (suomi)", 2006–2010 "Muokannut Whiskey~fiwiki (7.11.2006)").
 
 Do not use demo questions 32, 34 or 39 from `data/demo-questions.tsv` (1-based). Their top article is
 wrong because retrieval misses it.
@@ -177,8 +153,7 @@ the real treaty-date edit was placed one period late. Now a milestone needs a ch
 - Some demo questions miss: 32, 34 and 39 retrieve the wrong top article, and [38] finds no answer at all.
 - Hybrid search is measured but not used. Way B is a research table only.
 - Short articles (under 1,500 words or fewer than 4 sections) get an overview without section cards.
-- An answer to an English question is labelled "Machine-translated from Finnish" even when it cites English
-  sources. New (uncached) questions take about 25 s.
+- New (uncached) questions take about 25 s. Through Time "As of" takes about 2.5 s.
 
 ## Run
 
