@@ -14,6 +14,7 @@ import {
   getRoad,
   getTopicRoad,
   getSummary,
+  getCompare,
 } from "../api.js";
 import { setMockConfig } from "./index.js";
 import { ANNUAL_VERSIONS_CALIBRATION } from "./fixtures.js";
@@ -663,6 +664,96 @@ test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatko
   } else {
     assert.equal(tSv.mode, "llm");
   }
+});
+
+test("GET /api/compare/{lang}/{page_id} matches cross-language compare contract", async () => {
+  const res = await getCompare("fi", 1256);
+  const sumRes = MOCK.compare
+    ? await getSummary("fi", 1256)
+    : await fetch(`${process.env.API_BASE.replace(/\/+$/, "")}/api/summary/fi/1256`).then((r) => r.json());
+
+  assert.equal(res.article.lang, "fi");
+  assert.equal(res.article.page_id, 1256);
+  assert.equal(typeof res.article.title, "string");
+  assert.ok(res.article.title.length > 0);
+  assert.equal(typeof res.threshold, "number");
+  assert.ok(res.threshold > 0 && res.threshold < 1);
+
+  assert.ok(res.siblings && typeof res.siblings === "object");
+  for (const sibLang of ["sv", "en"]) {
+    const sib = res.siblings[sibLang];
+    assert.ok(sib && typeof sib === "object", `Talvisota should have ${sibLang} sibling`);
+    assert.equal(typeof sib.page_id, "number");
+    assert.equal(typeof sib.title, "string");
+    assert.ok(sib.url.startsWith(`https://${sibLang}.wikipedia.org/wiki/`));
+  }
+
+  assert.ok(Array.isArray(res.sections));
+  assert.equal(res.sections.length, sumRes.sections.length);
+  for (let i = 0; i < res.sections.length; i++) {
+    assert.equal(res.sections[i].no, sumRes.sections[i].no);
+    assert.equal(res.sections[i].heading, sumRes.sections[i].heading);
+  }
+
+  let sawMatch = false;
+  let sawNoMatch = false;
+  for (const sec of res.sections) {
+    for (const sibLang of ["sv", "en"]) {
+      const slot = sec[sibLang];
+      if (res.siblings[sibLang] === null) {
+        assert.equal(slot, null);
+        continue;
+      }
+      if (slot === null) continue;
+      assert.equal(typeof slot.match, "boolean");
+      assert.equal(typeof slot.distance, "number");
+      assert.equal(slot.match, slot.distance <= res.threshold);
+      if (slot.match) {
+        sawMatch = true;
+        assert.ok(slot.section === null || typeof slot.section === "string");
+        assert.equal(typeof slot.passage, "string");
+        assert.ok(slot.passage.trim().length > 0);
+        assert.equal(typeof slot.url, "string");
+        assert.ok(slot.url.startsWith(`https://${sibLang}.wikipedia.org/wiki/`));
+        if (MOCK.compare) {
+          assert.ok(slot.passage.includes("[mock]"));
+        } else {
+          assert.ok(!slot.passage.includes("[mock]"));
+        }
+      } else {
+        sawNoMatch = true;
+        assert.equal(slot.section, null);
+        assert.equal(slot.passage, null);
+        assert.equal(slot.url, null);
+      }
+    }
+  }
+  assert.ok(sawMatch && sawNoMatch, "Expected both matching and non-matching slots in fi:1256");
+
+  // Single-sibling (en only, sv missing)
+  const enOnlyPid = MOCK.compare ? 304670 : 19086;
+  const enOnlyRes = await getCompare("fi", enOnlyPid);
+  assert.equal(enOnlyRes.siblings.sv, null);
+  assert.ok(enOnlyRes.siblings.en !== null);
+  for (const sec of enOnlyRes.sections) {
+    assert.equal(sec.sv, null);
+  }
+
+  // No-sibling article (both sv and en missing)
+  const noSibPid = MOCK.compare ? 306770 : 6869;
+  const noSibRes = await getCompare("fi", noSibPid);
+  assert.equal(noSibRes.siblings.sv, null);
+  assert.equal(noSibRes.siblings.en, null);
+  for (const sec of noSibRes.sections) {
+    assert.equal(sec.sv, null);
+    assert.equal(sec.en, null);
+  }
+
+  // Non-Finnish article -> 404
+  await assert.rejects(
+    () => getCompare("sv", 23612),
+    (err) => err && (err.status === 404 || /404/.test(String(err.message)))
+  );
 });
 
 test("Simulated error mode (?mockError=1 / setMockConfig) rejects properly", { skip: !MOCK.stars }, async () => {

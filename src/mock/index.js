@@ -895,3 +895,100 @@ export async function mockGetSummary(lang = "fi", pageId = 1256, ui = null) {
   res.history_status = hasInlineHistory ? "ready" : "none";
   return res;
 }
+
+const COMPARE_MOCK_THRESHOLD = 0.35;
+
+function buildMockCompareUrl(baseUrl, section) {
+  if (!section) return baseUrl;
+  const anchor = String(section).trim().replace(/\s+/g, "_");
+  return `${baseUrl}#${encodeURIComponent(anchor)}`;
+}
+
+export async function mockGetCompare(lang = "fi", pageId = 1256) {
+  await simulateNetwork();
+
+  if (!["fi", "sv", "en"].includes(lang)) {
+    throw createHttpError(422, `Invalid language: '${lang}'. Expected fi, sv, or en.`);
+  }
+  if (lang !== "fi") {
+    throw createHttpError(404, "Compare is available for Finnish articles only");
+  }
+
+  const pid = pageId !== null && pageId !== undefined && pageId !== "" ? Number(pageId) : 1256;
+  const { byKey, byFiPageId, byWikidata } = getStarsDataset();
+  const star = byKey.get(`fi:${pid}`) || byFiPageId.get(pid);
+  if (!star) {
+    throw createHttpError(404, `Article fi:${pid} not found`);
+  }
+
+  const rawSiblings = star.wikidata_id
+    ? (byWikidata.get(star.wikidata_id) || []).filter(
+        (s) => !(s.lang === star.lang && s.page_id === star.page_id)
+      )
+    : [];
+
+  const siblings = { sv: null, en: null };
+  for (const sibLang of ["sv", "en"]) {
+    const s = rawSiblings.find((item) => item.lang === sibLang);
+    if (s) {
+      siblings[sibLang] = {
+        page_id: s.page_id,
+        title: s.title,
+        url: makeWikiUrl(sibLang, s.title),
+      };
+    }
+  }
+
+  const built = buildSummaryForStar(star, rawSiblings);
+  const sections = (built.sections || []).map((sec) => {
+    const no = Number(sec.no);
+    const gapSection = /kunniamerk|taite|viihd|perint/i.test(sec.heading) || no % 5 === 0;
+    const svOnlyGap = !gapSection && no % 3 === 0 && siblings.sv && siblings.en;
+
+    const makeSlot = (sibLang) => {
+      const sib = siblings[sibLang];
+      if (!sib) return null;
+      if (gapSection || (svOnlyGap && sibLang === "sv")) {
+        return {
+          match: false,
+          distance: Number((0.371 + ((no % 4) * 0.031)).toFixed(3)),
+          section: null,
+          passage: null,
+          url: null,
+        };
+      }
+      const sibSection =
+        no === 4
+          ? null
+          : sibLang === "sv"
+            ? `${sec.heading} (sv)`
+            : `${sec.heading} (en)`;
+      const distance = Number((0.258 + ((no + (sibLang === "en" ? 0 : 2)) % 4) * 0.021).toFixed(3));
+      return {
+        match: true,
+        distance,
+        section: sibSection,
+        passage: `[mock] ${sib.title} covers "${sec.heading}" in ${sibLang.toUpperCase()} (${sibSection || "lead"}).`,
+        url: buildMockCompareUrl(sib.url, sibSection),
+      };
+    };
+
+    return {
+      no,
+      heading: sec.heading,
+      sv: makeSlot("sv"),
+      en: makeSlot("en"),
+    };
+  });
+
+  return {
+    article: {
+      lang: "fi",
+      page_id: star.page_id,
+      title: star.title,
+    },
+    threshold: COMPARE_MOCK_THRESHOLD,
+    siblings,
+    sections,
+  };
+}

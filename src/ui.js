@@ -1850,6 +1850,135 @@ export function createUI({
       .join("")}</div>`;
   }
 
+  function buildCompareState(compareData) {
+    if (!compareData || !Array.isArray(compareData.sections)) return null;
+    const byNo = new Map();
+    for (const sec of compareData.sections) {
+      byNo.set(Number(sec.no), sec);
+    }
+    return {
+      articlePageId: compareData.article?.page_id ?? null,
+      siblings: compareData.siblings || { sv: null, en: null },
+      byNo,
+    };
+  }
+
+  function resolveSectionCompare(sec, compareState, art) {
+    if (!sec || !compareState || art?.lang !== "fi") return null;
+    if (
+      compareState.articlePageId !== null &&
+      art.page_id !== undefined &&
+      Number(art.page_id) !== Number(compareState.articlePageId)
+    ) {
+      return null;
+    }
+    const cmp = compareState.byNo.get(Number(sec.no));
+    if (!cmp || String(cmp.heading || "") !== String(sec.heading || "")) return null;
+    return { cmp, siblings: compareState.siblings };
+  }
+
+  function renderSectionCompareHtml(resolved, { compact = false } = {}) {
+    if (!resolved) return "";
+    const { cmp, siblings } = resolved;
+    const sibs = siblings || {};
+    const matchedLangs = ["sv", "en"].filter((l) => cmp[l] && cmp[l].match === true);
+    const hasAnySibling = Boolean(sibs.sv || sibs.en);
+    const comparedNonMatch = ["sv", "en"].some((l) => Boolean(sibs[l]) && cmp[l]?.match === false);
+
+    if (matchedLangs.length > 0) {
+      if (compact) {
+        const itemsHtml = matchedLangs
+          .map(
+            (l) => `
+              <span class="compare-compact-item">
+                <span class="dot dot-${l}" aria-hidden="true"></span>
+                <span class="compare-compact-label">${escapeHtml(t(`compare.compact.${l}`))}</span>
+              </span>
+            `
+          )
+          .join("");
+        return `<div class="compare-presence is-compact"><div class="compare-compact-row">${itemsHtml}</div></div>`;
+      }
+      const blocksHtml = matchedLangs
+        .map((l) => {
+          const slot = cmp[l];
+          const secHtml = slot.section
+            ? `<span class="compare-match-section">${escapeHtml(t("compare.sectionPrefix"))} <span lang="${l}">${escapeHtml(slot.section)}</span></span>`
+            : `<span class="compare-match-section">${escapeHtml(t("compare.leadLabel"))}</span>`;
+          return `
+            <div class="compare-match-item">
+              <div class="compare-match-head">
+                <span class="dot dot-${l}" aria-hidden="true"></span>
+                <span class="compare-match-label">${escapeHtml(t(`compare.alsoIn.${l}`))}</span>
+              </div>
+              <blockquote class="compare-passage-quote">
+                <span class="compare-passage-text" lang="${l}">${escapeHtml(slot.passage || "")}</span>
+              </blockquote>
+              <div class="compare-match-footer">
+                ${secHtml}
+                <a class="compare-match-link" href="${escapeHtml(slot.url || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(t(`compare.readIn.${l}`))}</a>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+      return `<section class="compare-presence"><div class="compare-match-list">${blocksHtml}</div></section>`;
+    }
+
+    if (hasAnySibling && comparedNonMatch) {
+      if (compact) {
+        return `
+          <div class="compare-presence is-compact">
+            <div class="compare-compact-row">
+              <span class="compare-compact-item">
+                <span class="dot dot-fi" aria-hidden="true"></span>
+                <span class="compare-compact-label">${escapeHtml(t("compare.compact.onlyFi"))}</span>
+              </span>
+            </div>
+          </div>
+        `;
+      }
+      const hintKey =
+        sibs.sv && sibs.en
+          ? "compare.onlyFiHintBoth"
+          : sibs.sv
+            ? "compare.onlyFiHintSv"
+            : "compare.onlyFiHintEn";
+      return `
+        <section class="compare-presence">
+          <div class="compare-only-fi">
+            <div class="compare-only-fi-row">
+              <span class="dot dot-fi" aria-hidden="true"></span>
+              <span class="compare-only-fi-label">${escapeHtml(t("compare.onlyFi"))}</span>
+            </div>
+            <p class="compare-only-fi-hint">${escapeHtml(t(hintKey))}</p>
+          </div>
+        </section>
+      `;
+    }
+
+    return "";
+  }
+
+  function renderFiHistoryCompareDots(sec, compareState, fiArt) {
+    const resolved = resolveSectionCompare(sec, compareState, { ...fiArt, lang: "fi" });
+    if (!resolved) return "";
+    const { cmp, siblings } = resolved;
+    const matchedLangs = ["sv", "en"].filter((l) => cmp[l] && cmp[l].match === true);
+    if (matchedLangs.length > 0) {
+      const dots = matchedLangs
+        .map((l) => `<span class="dot dot-${l}" title="${escapeHtml(t(`compare.alsoIn.${l}`))}"></span>`)
+        .join("");
+      return `<span class="compare-fi-dots">${dots}</span>`;
+    }
+    const hasAnySibling = Boolean(siblings?.sv || siblings?.en);
+    const comparedNonMatch = ["sv", "en"].some((l) => Boolean(siblings?.[l]) && cmp[l]?.match === false);
+    if (hasAnySibling && comparedNonMatch) {
+      return `<span class="compare-fi-dots"><span class="dot dot-fi" title="${escapeHtml(t("compare.onlyFi"))}"></span></span>`;
+    }
+    return "";
+  }
+
   function renderSummaryCardHtml(item, { isFocused = false, diff = 0, readMoreOpen = false } = {}) {
     const art = item.article || {};
     const artLang = art.lang || "fi";
@@ -1940,6 +2069,7 @@ export function createUI({
             fiTitle
           )}</a>`
         : escapeHtml(fiTitle);
+      const compareState = buildCompareState(activeSummaryState?.compareData);
       const rowsHtml = fiSections
         .map((s) => {
           const hist = s.history || {};
@@ -1954,10 +2084,11 @@ export function createUI({
               })
             )}</span>
           `;
+          const dotsHtml = renderFiHistoryCompareDots(s, compareState, fiArt);
           return `
             <li class="summary-fi-history-row">
               <span class="summary-fi-history-heading" lang="fi">${escapeHtml(s.heading || "")}</span>
-              ${badgeHtml}
+              <span class="summary-fi-history-meta">${dotsHtml}${badgeHtml}</span>
             </li>
           `;
         })
@@ -2056,6 +2187,14 @@ export function createUI({
       allowChips: false,
     });
 
+    const resolvedCompare =
+      isFocused || diff === 1 || diff === 2
+        ? resolveSectionCompare(sec, buildCompareState(activeSummaryState?.compareData), art)
+        : null;
+    const compareHtml = resolvedCompare
+      ? renderSectionCompareHtml(resolvedCompare, { compact: !isFocused })
+      : "";
+
     const readMoreHtml =
       isFocused && readMoreOpen
         ? `<div class="summary-readmore-body">${renderMarkdownHtml(sec.text || "", art.title || "")}</div>`
@@ -2073,6 +2212,7 @@ export function createUI({
       <p class="summary-trail-oneline">${formatInlineMd(oneLine)}</p>
       ${extraSummary ? `<p class="summary-trail-summary">${formatInlineMd(extraSummary)}</p>` : ""}
       ${secFactsHtml}
+      ${compareHtml}
       ${
         isFocused
           ? `
@@ -2189,6 +2329,7 @@ export function createUI({
 
     activeSummaryState = {
       summaryData,
+      compareData: null,
       items,
       focusIdx: 0,
       readMoreOpen: false,
@@ -2228,11 +2369,13 @@ export function createUI({
 
   function updateSummaryTrail(summaryData) {
     if (!activeSummaryState || !summaryData || !summaryData.article) return [];
+    const prevCompareData = activeSummaryState.compareData || null;
     const { items, summaryMinutes } = buildSummaryItems(summaryData);
     const cssElements = createSummaryCssElements(items);
     const clampedFocus = Math.max(0, Math.min(items.length - 1, activeSummaryState.focusIdx));
     activeSummaryState = {
       summaryData,
+      compareData: prevCompareData,
       items,
       focusIdx: clampedFocus,
       readMoreOpen: false,
@@ -2244,6 +2387,18 @@ export function createUI({
       items: items.map((item, idx) => ({ ...item, element: cssElements[idx] })),
       focusIdx: clampedFocus,
     };
+  }
+
+  function attachSummaryCompare(compareData) {
+    if (!activeSummaryState || !compareData || !Array.isArray(compareData.sections)) return;
+    const prevCardScroll =
+      summaryFocusedOverlay?.querySelector(".summary-trail-card")?.scrollTop || 0;
+    activeSummaryState.compareData = compareData;
+    renderSummaryCardsAndHud();
+    if (prevCardScroll > 0) {
+      const nextCard = summaryFocusedOverlay?.querySelector(".summary-trail-card");
+      if (nextCard) nextCard.scrollTop = prevCardScroll;
+    }
   }
 
   function updateSummaryFocusScreen({ visible = false, x = 0, y = 0, opacity = 1, scale = 1 } = {}) {
@@ -2699,6 +2854,7 @@ export function createUI({
     closeRoadView,
     openSummaryTrail,
     updateSummaryTrail,
+    attachSummaryCompare,
     updateSummaryFocusScreen,
     closeSummaryTrail,
     isSummaryTrailOpen() {

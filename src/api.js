@@ -5,7 +5,7 @@
 
 export const MOCK = {
   stars: false, search: false, article: false, timeline: false, asof: false, diff: false,
-  summary: false, ask: false, threads: true, road: true, "topic-road": true,
+  summary: false, ask: false, compare: false, threads: true, road: true, "topic-road": true,
 };
 
 const API_BASE = (globalThis.process?.env?.API_BASE ?? "").replace(/\/+$/, "");
@@ -23,6 +23,7 @@ import {
   mockGetRoad,
   mockGetTopicRoad,
   mockGetSummary,
+  mockGetCompare,
 } from "./mock/index.js";
 
 async function fetchJson(path) {
@@ -198,4 +199,11 @@ export async function getSummary(lang = "fi", pageId = 1256, ui = null) {
   if (MOCK.summary) return mockGetSummary(safeLang, safePageId, ui);
   const qs = ui ? `?ui=${encodeURIComponent(ui)}` : "";
   return fetchJson(`/api/summary/${encodeURIComponent(safeLang)}/${encodeURIComponent(safePageId)}${qs}`);
+}
+
+export async function getCompare(lang = "fi", pageId = 1256) {
+  const safeLang = lang || "fi";
+  const safePageId = pageId ?? 1256;
+  if (MOCK.compare) return mockGetCompare(safeLang, safePageId);
+  return fetchJson(`/api/compare/${encodeURIComponent(safeLang)}/${encodeURIComponent(safePageId)}`);
 }

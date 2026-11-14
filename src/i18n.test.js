@@ -130,3 +130,28 @@ test("016 summarize multilingual keys exist and are non-empty in fi, sv, en", ()
     }
   }
 });
+
+test("017 cross-language compare keys exist and are non-empty in fi, sv, en", () => {
+  const keys = [
+    "compare.alsoIn.sv",
+    "compare.alsoIn.en",
+    "compare.onlyFi",
+    "compare.compact.sv",
+    "compare.compact.en",
+    "compare.compact.onlyFi",
+    "compare.onlyFiHintBoth",
+    "compare.onlyFiHintSv",
+    "compare.onlyFiHintEn",
+    "compare.sectionPrefix",
+    "compare.leadLabel",
+    "compare.readIn.sv",
+    "compare.readIn.en",
+  ];
+  for (const code of SUPPORTED) {
+    for (const key of keys) {
+      const val = STRINGS[code][key];
+      assert.equal(typeof val, "string", `${code}.${key} must be a string`);
+      assert.ok(val.trim().length > 0, `${code}.${key} must be non-empty`);
+    }
+  }
+});

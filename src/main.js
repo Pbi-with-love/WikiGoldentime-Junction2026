@@ -11,6 +11,7 @@ import {
   getThreads,
   getTopicRoad,
   getSummary,
+  getCompare,
 } from "./api.js";
 import { createGalaxyScene } from "./scene.js";
 import { createTimeSlider } from "./timeslider.js";
@@ -426,11 +427,31 @@ async function init() {
     if (!star) return;
 
     const seq = ++summaryLoadSeq;
+    articleLoadSeq++;
     roadLoadSeq++;
+    ui.closeArticlePanel();
     sliderCtrl?.stopIntro();
     sliderCtrl?.setYear(2026);
     ui.updateHoverLabel(null);
     ui.setLoading(true);
+
+    let summaryOpened = false;
+    let pendingCompare = null;
+    if (lang === "fi") {
+      getCompare("fi", page_id)
+        .then((compareData) => {
+          if (seq !== summaryLoadSeq) return;
+          if (summaryOpened && ui.isSummaryTrailOpen()) {
+            ui.attachSummaryCompare(compareData);
+          } else {
+            pendingCompare = compareData;
+          }
+        })
+        .catch((err) => {
+          if (seq !== summaryLoadSeq) return;
+          console.warn("Cross-language compare unavailable:", err);
+        });
+    }
 
     try {
       const summaryData = await getSummary(lang, page_id, uiLang);
@@ -439,7 +460,12 @@ async function init() {
       ui.closeArticlePanel();
       sceneCtrl?.setThreads(null, [], currentYear);
       const trailItems = ui.openSummaryTrail(summaryData);
+      summaryOpened = true;
       sceneCtrl?.enterSummaryTrail({ star, items: trailItems });
+      if (pendingCompare) {
+        ui.attachSummaryCompare(pendingCompare);
+        pendingCompare = null;
+      }
 
       if (summaryData.history_status === "building") {
         setTimeout(async () => {
