@@ -39,6 +39,9 @@ Also fixed here (015 bug, ask side): 015's same-language shortcut (its A3: `ques
 possibly `milestones[].answer`) are in Finnish for en/sv questions, because they come from the
 Finnish history text. So the en UI shows Finnish milestone fact texts. See B5.
 
+
+**Amendment 016-A (user decisions):** (1) Index on wikirag.article.wikidata_id is APPROVED: add it without asking (CREATE INDEX IF NOT EXISTS ... in the 016 migration file; report EXPLAIN before/after). (2) fi_history must NOT depend on the Finnish summary cache: section history and ghost sections come from SVT and need no LLM. If the fi data is not available yet, build ONLY the history+ghosts part in the background (no LLM) and return a new field history_status: 'ready' | 'building' | 'none' ('none' = the fi sibling has no SVT history, or there is no fi sibling). The UI shows 'Loading edit history…' (fi/sv/en strings in src/i18n.js) for 'building' instead of an empty block, and re-fetches once when building. Add tests for the three states; contract test asserts history_status is one of the three values.
+
 ## Definitions (use these names in code, tests and logs)
 - **requested article**: `(lang, page_id)` in the URL.
 - **default row**: `summary_cache` row with `ui=''` (spec 009, unchanged). Same for `answer_cache`
