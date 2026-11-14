@@ -70,6 +70,14 @@ wikihistory (dataset M, Finnish only):
 - Diff and month-timeline logic: port from `~/mariadb-system-versioning-wikipedia/app.py`.
 - Evaluation: `~/mariadb-vector-wikipedia-rag/evaluate.py` + `data/test-questions.tsv` (37 questions).
 
+## Definition of done (user rule, 2026-11-14) — applies to every spec, Hydrogen and Claude workers
+- A feature ships only after a **Playwright end-to-end run of every user flow the spec touches, on the DEPLOYED
+  build** (VPS :8002 serving the new dist/ through an SSH tunnel on your own local port), in the UI languages the
+  flow supports — not only `vite dev`, not only curl. Backend-only changes that show up in the UI count as UI flows.
+- worker_done lists each flow (steps, UI language, pass/fail), console errors (must be 0), failed requests (must be 0),
+  and screenshot paths under artifacts/screenshots/<spec-id>/. Missing Playwright evidence = not done; the
+  orchestrator sends the task back.
+
 ## Rules
 - Vector search: subquery on the vector table alone (`ORDER BY VEC_DISTANCE_COSINE(...) LIMIT n`),
   then JOIN outside; a flat join is ~50× slower. `SET mhnsw_ef_search = 80` per session.
