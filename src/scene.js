@@ -2896,51 +2896,41 @@ export function createGalaxyScene({
       const anchors =
         currentLens === "history" ? HISTORY_GUIDE_ANCHORS : GEO_GUIDE_ANCHORS;
       const placedRects = [];
+      const GUIDE_LABEL_NUDGES = [[0, 0], [-14, 0], [14, 0], [-26, 0], [26, 0], [0, -14], [0, 14]];
       for (const anc of anchors) {
         projVec.copy(anc.pos).project(camera);
         if (projVec.z < -1 || projVec.z > 1) continue;
-        const x = (projVec.x + 1) * 0.5 * width;
-        const y = (-projVec.y + 1) * 0.5 * height;
-        const rx = Math.round(x);
-        const ry = Math.round(y);
+        const baseX = (projVec.x + 1) * 0.5 * width;
+        const baseY = (-projVec.y + 1) * 0.5 * height;
         const bw = anc.boxW || 80;
         const bh = anc.boxH || 26;
-        const rect = {
-          left: rx - bw * 0.5,
-          right: rx + bw * 0.5,
-          top: ry - bh * 0.5,
-          bottom: ry + bh * 0.5,
-        };
-        if (
-          rect.left < 2 ||
-          rect.right > width - 2 ||
-          rect.top < 2 ||
-          rect.bottom > height - 2
-        ) {
-          continue;
-        }
-        let hitsUi = false;
-        for (const ui of cachedExclusionRects) {
-          if (rectsIntersect(rect, ui, 2)) {
-            hitsUi = true;
-            break;
+        // Spec 033: a label that collides (Turku next to Helsinki on a small portrait map) is nudged
+        // sideways/up/down before it is dropped. Offset 0 comes first, so uncrowded layouts are unchanged.
+        for (const [dx, dy] of GUIDE_LABEL_NUDGES) {
+          const x = baseX + dx;
+          const y = baseY + dy;
+          const rx = Math.round(x);
+          const ry = Math.round(y);
+          const rect = {
+            left: rx - bw * 0.5,
+            right: rx + bw * 0.5,
+            top: ry - bh * 0.5,
+            bottom: ry + bh * 0.5,
+          };
+          if (
+            rect.left < 2 ||
+            rect.right > width - 2 ||
+            rect.top < 2 ||
+            rect.bottom > height - 2
+          ) {
+            continue;
           }
+          if (cachedExclusionRects.some((ui) => rectsIntersect(rect, ui, 2))) continue;
+          if (placedRects.some((prev) => rectsIntersect(rect, prev, 1))) continue;
+          placedRects.push(rect);
+          lensGuideLabels.push({ label: anc.label, x, y });
+          break;
         }
-        if (hitsUi) continue;
-        let hitsLabel = false;
-        for (const prev of placedRects) {
-          if (rectsIntersect(rect, prev, 1)) {
-            hitsLabel = true;
-            break;
-          }
-        }
-        if (hitsLabel) continue;
-        placedRects.push(rect);
-        lensGuideLabels.push({
-          label: anc.label,
-          x,
-          y,
-        });
       }
     }
 
