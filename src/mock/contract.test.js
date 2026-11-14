@@ -303,6 +303,9 @@ test("GET /api/ask supports Demo Path A (How did the Winter War end)", async () 
   assert.equal(resSv.out_lang, "sv");
   assert.ok(Array.isArray(resSv.sources) && resSv.sources.length >= 1);
   assert.ok(Array.isArray(resSv.milestones) && resSv.milestones.length >= 2);
+  const milestoneShape = (msList) =>
+    msList.map((ms) => [ms.from_year, ms.to_year, ms.changed_by?.rev_id ?? null]);
+  assert.deepEqual(milestoneShape(resSv.milestones), milestoneShape(res.milestones));
   if (MOCK.ask) {
     assert.ok(resSv.answer.includes("[mock] (sv)"));
   } else {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
+import logging
 from pathlib import Path
 import sys
 import time
@@ -83,6 +84,7 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool, ui: str
             "cached_hit": stats.cached_hit,
             "milestones": ms_count,
             "hist_calls": stats.history_llm_calls,
+            "total_calls": stats.total_llm_calls,
             "max_calls": stats.max_llm_calls,
             "windows_scanned": stats.windows_scanned,
             "versions_read": stats.versions_read,
@@ -114,6 +116,7 @@ def _process_one(idx: int, total: int, row: dict[str, str], force: bool, ui: str
             "cached_hit": False,
             "milestones": 0,
             "hist_calls": 0,
+            "total_calls": 0,
             "max_calls": 0,
             "windows_scanned": 0,
             "versions_read": 0,
@@ -155,6 +158,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    ask_logger = logging.getLogger("backend.ask")
+    if not logging.getLogger().handlers and not ask_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        ask_logger.addHandler(handler)
+        ask_logger.setLevel(logging.INFO)
+        ask_logger.propagate = False
+
     tsv_path = Path(args.questions)
     if not tsv_path.is_absolute():
         tsv_path = (REPO_ROOT / tsv_path).resolve()
@@ -194,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     direct_n = sum(1 for r in results if r["resolution"] == "direct")
     sibling_n = sum(1 for r in results if r["resolution"] == "sibling")
     none_n = sum(1 for r in results if r["resolution"] == "none")
-    total_calls = sum(r["hist_calls"] + (0 if r["cached_hit"] else 1) for r in results)
+    total_calls = sum(r["total_calls"] for r in results)
     total_in = sum(r["in_tok"] for r in results)
     total_out = sum(r["out_tok"] for r in results)
 

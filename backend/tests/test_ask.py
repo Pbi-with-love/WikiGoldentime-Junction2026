@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -220,6 +221,12 @@ def _make_fake_llm_client(responses: list[dict[str, Any] | str]) -> Any:
                     stop_reason="max_tokens",
                     content=[SimpleNamespace(type="text", text='{"found": true')],
                     usage=SimpleNamespace(input_tokens=10, output_tokens=4000),
+                )
+            if item == "non_json":
+                return SimpleNamespace(
+                    stop_reason="end_turn",
+                    content=[SimpleNamespace(type="text", text="Not valid JSON at all")],
+                    usage=SimpleNamespace(input_tokens=10, output_tokens=5),
                 )
             return SimpleNamespace(
                 stop_reason="end_turn",
@@ -1239,38 +1246,88 @@ def test_ask_ui_hash_validation_miss_fallback_and_translation(monkeypatch):
     assert scheduled[0][1][1] == sv_hash
     assert scheduled[0][1][2] == "sv"
 
-    # 4. build_and_cache_ask with ui="sv" uses translated system prompts, localized no-answer milestone text,
-    #    preserves verbatim Finnish source_sentence, and sets out_lang="sv".
-    client = _make_fake_llm_client(
-        [
+    # 4. build_and_cache_ask with ui="sv" translates the seeded default row in 1 batched call,
+    #    preserves verbatim Finnish source_sentence and milestones, uses localized no-answer text,
+    #    and sets out_lang="sv" and cache_ui="sv".
+    seeded_default = {
+        "answer": "The Winter War ended with the Moscow Peace Treaty signed 12 March 1940 [1].",
+        "facts": [
             {
-                "found": True,
-                "answer": "Vinterkriget slutade med Moskvafreden den 12 mars 1940 [1].",
-                "facts": [
-                    {
-                        "text": "Moskvafreden slöts 12 mars 1940",
-                        "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.",
-                        "n": 1,
-                    },
-                    {
-                        "text": "Translated source should be dropped",
-                        "source_sentence": "Moskvafreden slöts den 12 mars 1940.",
-                        "n": 1,
-                    },
-                ],
+                "text": "Moscow Peace Treaty signed 12 March 1940",
+                "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940.",
+                "n": 1,
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=22491034",
+            }
+        ],
+        "sources": [
+            {
+                "n": 1,
+                "lang": "fi",
+                "page_id": 52097,
+                "title": "Moskovan rauhansopimus (1940)",
+                "url": "https://fi.wikipedia.org/wiki/Moskovan_rauhansopimus_(1940)",
+            }
+        ],
+        "top": {"lang": "fi", "page_id": 52097},
+        "history_available": True,
+        "pending": False,
+        "out_lang": None,
+        "milestones": [
+            {
+                "from_year": 2004,
+                "to_year": 2005,
+                "found": False,
+                "answer": ask.NO_ANSWER_MILESTONE_TEXT,
+                "rev_id": 412098,
+                "user": "Kahkonen",
+                "comment": "alku",
+                "row_start": "2004-05-14T12:10:00Z",
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=412098",
+                "changed_by": None,
+                "facts": [],
             },
-            "refusal",
             {
+                "from_year": 2006,
+                "to_year": 2026,
                 "found": True,
-                "answer": "Fredsfördraget slöts 12 mars 1940.",
+                "answer": "Peace treaty was signed on 12 March 1940.",
+                "rev_id": 999111,
+                "user": "Risukarhi",
+                "comment": "tarkennus",
+                "row_start": "2006-11-07T21:36:39Z",
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=999111",
+                "changed_by": {
+                    "rev_id": 999111,
+                    "row_start": "2006-11-07T21:36:39Z",
+                    "user": "Risukarhi",
+                    "comment": "tarkennus",
+                    "url": "https://fi.wikipedia.org/w/index.php?oldid=999111",
+                },
                 "facts": [
                     {
-                        "text": "Fredsfördraget slöts 12 mars 1940",
+                        "text": "Peace treaty signed 12 March 1940",
                         "source_sentence": "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan.",
-                        "n": 1,
+                        "url": "https://fi.wikipedia.org/w/index.php?oldid=999111",
                     }
                 ],
             },
+        ],
+    }
+    store["cache"][plain_hash] = json.dumps(seeded_default)
+
+    client = _make_fake_llm_client(
+        [
+            {
+                "items": [
+                    {
+                        "id": "t0",
+                        "text": "Vinterkriget slutade med Moskvafreden den 12 mars 1940 [1].",
+                    },
+                    {"id": "t1", "text": "Moskvafreden slöts 12 mars 1940"},
+                    {"id": "t2", "text": "Fredsfördraget slöts 12 mars 1940."},
+                    {"id": "t3", "text": "Fredsfördraget slöts den 12 mars 1940"},
+                ]
+            }
         ]
     )
     payload, stats = ask.build_and_cache_ask(
@@ -1285,11 +1342,15 @@ def test_ask_ui_hash_validation_miss_fallback_and_translation(monkeypatch):
     assert payload["answer"].startswith("Vinterkriget slutade")
     assert len(payload["facts"]) == 1
     assert payload["facts"][0]["source_sentence"] == "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940."
-    assert stats.current_facts_dropped == 1
-    assert client.recorded_calls[0]["system"] == ask.TRANSLATED_CURRENT_SYSTEM_PROMPTS["sv"]
-    assert client.recorded_calls[1]["system"] == ask.TRANSLATED_YEAR_SYSTEM_PROMPTS["sv"]
+    assert len(client.recorded_calls) == 1
+    assert stats.history_llm_calls == 0
+    assert stats.total_llm_calls == 1
     assert payload["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["sv"]
     assert payload["milestones"][1]["answer"] == "Fredsfördraget slöts 12 mars 1940."
+    assert (
+        payload["milestones"][1]["facts"][0]["source_sentence"]
+        == "Moskovan rauhansopimus solmittiin 12. maaliskuuta 1940 ja se päätti talvisodan."
+    )
     assert store["cache_ui"][sv_hash] == "sv"
 
     # 5. Cache hit with ui=sv returns translated payload without scheduling work
@@ -1298,3 +1359,414 @@ def test_ask_ui_hash_validation_miss_fallback_and_translation(monkeypatch):
     assert r_hit.status_code == 200
     assert r_hit.json()["out_lang"] == "sv"
     assert len(scheduled) == 0
+
+
+def _b1_sample_default() -> dict[str, Any]:
+    return {
+        "answer": "The Winter War ended in March 1940 with the Moscow Peace Treaty [1].",
+        "facts": [
+            {
+                "text": "Treaty signed 12 March 1940",
+                "source_sentence": "Moskovan rauhansopimus allekirjoitettiin illalla 12. maaliskuuta 1940.",
+                "n": 1,
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=22500001",
+            },
+            {
+                "text": "Fighting stopped on 13 March 1940",
+                "source_sentence": "Taistelut päättyivät 13. maaliskuuta 1940 kello 11.",
+                "n": 1,
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=22500001",
+            },
+        ],
+        "sources": [
+            {
+                "n": 1,
+                "lang": "fi",
+                "page_id": 1256,
+                "title": "Talvisota",
+                "url": "https://fi.wikipedia.org/wiki/Talvisota",
+            }
+        ],
+        "top": {"lang": "fi", "page_id": 1256},
+        "history_available": True,
+        "pending": False,
+        "out_lang": None,
+        "milestones": [
+            {
+                "from_year": 2003,
+                "to_year": 2004,
+                "found": False,
+                "answer": ask.NO_ANSWER_MILESTONE_TEXT,
+                "rev_id": 100,
+                "user": "U0",
+                "comment": "c0",
+                "row_start": "2003-12-31T20:00:00Z",
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=100",
+                "changed_by": None,
+                "facts": [],
+            },
+            {
+                "from_year": 2005,
+                "to_year": 2005,
+                "found": True,
+                "answer": "Peace came on 13 March 1940.",
+                "rev_id": 590107,
+                "user": "U1",
+                "comment": "c1",
+                "row_start": "2005-12-31T20:00:00Z",
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=590107",
+                "changed_by": {
+                    "rev_id": 590107,
+                    "row_start": "2005-06-01T10:00:00Z",
+                    "user": "U1",
+                    "comment": "c1",
+                    "url": "https://fi.wikipedia.org/w/index.php?oldid=590107",
+                },
+                "facts": [
+                    {
+                        "text": "War ended in March 1940",
+                        "source_sentence": "Talvisota päättyi maaliskuussa 1940.",
+                        "url": "https://fi.wikipedia.org/w/index.php?oldid=590107",
+                    }
+                ],
+            },
+            {
+                "from_year": 2006,
+                "to_year": 2026,
+                "found": True,
+                "answer": "Signed evening of 12 March 1940.",
+                "rev_id": 1862876,
+                "user": "U2",
+                "comment": "c2",
+                "row_start": "2006-12-31T20:00:00Z",
+                "url": "https://fi.wikipedia.org/w/index.php?oldid=1862876",
+                "changed_by": {
+                    "rev_id": 1862876,
+                    "row_start": "2006-11-07T21:36:39Z",
+                    "user": "Whiskey~fiwiki",
+                    "comment": "siistintää",
+                    "url": "https://fi.wikipedia.org/w/index.php?oldid=1862876",
+                },
+                "facts": [
+                    {
+                        "text": "War ended in March 1940",
+                        "source_sentence": "Talvisota päättyi maaliskuussa 1940.",
+                        "url": "https://fi.wikipedia.org/w/index.php?oldid=1862876",
+                    },
+                    {
+                        "text": "Signed evening of 12 March",
+                        "source_sentence": "Rauhansopimus allekirjoitettiin illalla 12. maaliskuuta.",
+                        "url": "https://fi.wikipedia.org/w/index.php?oldid=1862876",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _strip_translated(payload: dict[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(payload)
+    out.pop("answer", None)
+    out.pop("out_lang", None)
+    for f in out.get("facts") or []:
+        f.pop("text", None)
+    for ms in out.get("milestones") or []:
+        ms.pop("answer", None)
+        for f in ms.get("facts") or []:
+            f.pop("text", None)
+    return out
+
+
+def _extract_sent_strings_from_call(call: dict[str, Any]) -> list[dict[str, str]]:
+    content = call["messages"][0]["content"]
+    start = content.index("<strings>\n") + len("<strings>\n")
+    end = content.index("\n</strings>")
+    return json.loads(content[start:end])
+
+
+def test_b1_ui_translate_only_unit_cases():
+    default = _b1_sample_default()
+    q_en = "How did the Winter War end?"
+    default_hash = ask.question_hash(q_en)
+    sv_hash = ask.question_hash(q_en, ui="sv")
+    fi_hash = ask.question_hash(q_en, ui="fi")
+    en_hash = ask.question_hash(q_en, ui="en")
+
+    store = _sample_store(with_history=True)
+    default_json = json.dumps(default, separators=(",", ":"), ensure_ascii=False)
+    store["cache"][default_hash] = default_json
+
+    def fail_embed(_texts: list[str]) -> tuple[list[list[float]], int]:
+        raise AssertionError("embed_fn must not be called when default row is cached")
+
+    unique = ask.collect_translatable(default)
+    assert len(unique) == 7
+    assert ask.NO_ANSWER_MILESTONE_TEXT not in unique
+    assert unique.count("War ended in March 1940") == 1
+
+    translations_sv = {
+        "The Winter War ended in March 1940 with the Moscow Peace Treaty [1].": "Vinterkriget slutade i mars 1940 med Moskvafreden [1].",
+        "Treaty signed 12 March 1940": "Fredsfördraget undertecknades 12 mars 1940",
+        "Fighting stopped on 13 March 1940": "Striderna upphörde 13 mars 1940",
+        "Peace came on 13 March 1940.": "Fred slöts 13 mars 1940.",
+        "War ended in March 1940": "Kriget slutade i mars 1940",
+        "Signed evening of 12 March 1940.": "Undertecknades på kvällen den 12 mars 1940.",
+        "Signed evening of 12 March": "Undertecknat på kvällen den 12 mars",
+    }
+
+    # (a)-(d), (h): full translation of seeded default with force=True
+    client_sv = _make_fake_llm_client(
+        [{"items": [{"id": f"t{i}", "text": translations_sv[txt]} for i, txt in enumerate(unique)]}]
+    )
+    variant_sv, stats_sv = ask.build_and_cache_ask(
+        q=q_en,
+        force=True,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_sv,
+        embed_fn=fail_embed,
+    )
+
+    # (a) strip_translated equality
+    assert _strip_translated(default) == _strip_translated(variant_sv)
+    assert variant_sv["out_lang"] == "sv"
+    assert variant_sv["pending"] is False
+
+    # (b) source_sentence identical & never sent in any LLM request
+    src_sentences = [f["source_sentence"] for f in default["facts"]] + [
+        f["source_sentence"] for ms in default["milestones"] for f in ms["facts"]
+    ]
+    variant_sentences = [f["source_sentence"] for f in variant_sv["facts"]] + [
+        f["source_sentence"] for ms in variant_sv["milestones"] for f in ms["facts"]
+    ]
+    assert variant_sentences == src_sentences
+    for call in client_sv.recorded_calls:
+        call_dump = json.dumps(call, ensure_ascii=False)
+        for sent in src_sentences:
+            assert sent not in call_dump
+
+    # (c) exactly 1 LLM call, repeated text sent once
+    assert len(client_sv.recorded_calls) == 1
+    assert stats_sv.history_llm_calls == 0
+    assert stats_sv.total_llm_calls == 1
+    assert stats_sv.translate_strings == 8
+    assert stats_sv.translate_fallbacks == 0
+    sent_items = _extract_sent_strings_from_call(client_sv.recorded_calls[0])
+    assert len(sent_items) == 7
+    assert sum(1 for it in sent_items if it["text"] == "War ended in March 1940") == 1
+    assert variant_sv["milestones"][1]["facts"][0]["text"] == "Kriget slutade i mars 1940"
+    assert variant_sv["milestones"][2]["facts"][0]["text"] == "Kriget slutade i mars 1940"
+
+    # (d) no-answer milestone gets NO_ANSWER_TEXT_BY_UI[ui] and is not sent
+    assert variant_sv["milestones"][0]["found"] is False
+    assert variant_sv["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["sv"]
+    assert all(ask.NO_ANSWER_MILESTONE_TEXT not in it["text"] for it in sent_items)
+
+    # (h) force=True ui build leaves default cache row unchanged
+    assert store["cache"][default_hash] == default_json
+    assert store["cache_ui"][sv_hash] == "sv"
+
+    # (e) translation dropping [1] falls back to original for that string only, translate_fallbacks == 1
+    bad_items = [{"id": f"t{i}", "text": translations_sv[txt]} for i, txt in enumerate(unique)]
+    bad_items[0]["text"] = "Vinterkriget slutade i mars 1940 med Moskvafreden."
+    client_partial = _make_fake_llm_client([{"items": bad_items}])
+    variant_partial, stats_partial = ask.build_and_cache_ask(
+        q=q_en,
+        force=True,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_partial,
+        embed_fn=fail_embed,
+    )
+    assert variant_partial["answer"] == default["answer"]
+    assert variant_partial["facts"][0]["text"] == "Fredsfördraget undertecknades 12 mars 1940"
+    assert variant_partial["out_lang"] == "sv"
+    assert stats_partial.translate_fallbacks == 1
+    assert stats_partial.wrote_cache is True
+
+    # (f) non-JSON (None) returns no cache write and raises RuntimeError
+    client_none = _make_fake_llm_client(["non_json"])
+    assert fi_hash not in store["cache"]
+    with pytest.raises(RuntimeError):
+        ask.build_and_cache_ask(
+            q=q_en,
+            force=True,
+            ui="fi",
+            rag_opener=lambda: FakeConnection(store),
+            llm_client=client_none,
+            embed_fn=fail_embed,
+        )
+    assert fi_hash not in store["cache"]
+    assert store["cache"][default_hash] == default_json
+
+    # (g) question_lang on hero questions + A3 same-language 0-call path
+    assert ask.question_lang("How did the Winter War end?") == "en"
+    assert ask.question_lang("Miten talvisota päättyi?") == "fi"
+    assert ask.question_lang("Hur slutade vinterkriget?") == "sv"
+    assert ask.question_lang("Loppuiko talvisota vuonna 1940?") == "fi"
+    assert ask.question_lang("koko") is None
+    assert ask.question_lang("Talvisota") is None
+
+    client_unused = _make_fake_llm_client([])
+    variant_en, stats_en = ask.build_and_cache_ask(
+        q=q_en,
+        force=True,
+        ui="en",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_unused,
+        embed_fn=fail_embed,
+    )
+    assert len(client_unused.recorded_calls) == 0
+    assert stats_en.total_llm_calls == 0
+    assert stats_en.history_llm_calls == 0
+    assert stats_en.translate_fallbacks == 0
+    assert variant_en["out_lang"] == "en"
+    assert variant_en["answer"] == default["answer"]
+    assert variant_en["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["en"]
+    assert en_hash in store["cache"]
+    assert store["cache"][default_hash] == default_json
+
+    # Also check A3 with Finnish question and ui="fi" -> localizes no-answer milestone with 0 calls
+    q_fi = "Miten talvisota päättyi?"
+    fi_def_hash = ask.question_hash(q_fi)
+    store["cache"][fi_def_hash] = default_json
+    variant_fi_a3, stats_fi_a3 = ask.build_and_cache_ask(
+        q=q_fi,
+        force=True,
+        ui="fi",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_unused,
+        embed_fn=fail_embed,
+    )
+    assert len(client_unused.recorded_calls) == 0
+    assert stats_fi_a3.total_llm_calls == 0
+    assert variant_fi_a3["out_lang"] == "fi"
+    assert variant_fi_a3["milestones"][0]["answer"] == ask.NO_ANSWER_TEXT_BY_UI["fi"]
+
+
+def test_b1_validation_edge_cases_and_cold_default():
+    # Edge cases on validation: duplicate id, empty after strip, non-string, missing id,
+    # reordered marker multiset (accepted), mismatched marker count (rejected), and all-fallback RuntimeError.
+    default = {
+        "answer": "First [1] and second [2] and again [1].",
+        "facts": [
+            {"text": "Fact A", "source_sentence": "Lause A.", "n": 1, "url": "https://fi.wikipedia.org/w/index.php?oldid=1"},
+            {"text": "Fact B", "source_sentence": "Lause B.", "n": 1, "url": "https://fi.wikipedia.org/w/index.php?oldid=1"},
+            {"text": "Fact C", "source_sentence": "Lause C.", "n": 1, "url": "https://fi.wikipedia.org/w/index.php?oldid=1"},
+            {"text": "Fact D", "source_sentence": "Lause D.", "n": 1, "url": "https://fi.wikipedia.org/w/index.php?oldid=1"},
+        ],
+        "sources": [],
+        "top": {"lang": "fi", "page_id": 1256},
+        "history_available": False,
+        "pending": False,
+        "out_lang": None,
+        "milestones": [],
+    }
+    q = "Talvisota"  # question_lang -> None -> always calls translator
+    assert ask.question_lang(q) is None
+    q_def_hash = ask.question_hash(q)
+    q_sv_hash = ask.question_hash(q, ui="sv")
+    store = _sample_store(with_history=False)
+    store["cache"][q_def_hash] = json.dumps(default)
+
+    # t0: reordered [2] [1] [1] -> multiset matches -> ACCEPTED
+    # t1 (Fact A): duplicated id -> fallback
+    # t2 (Fact B): empty after strip -> fallback
+    # t3 (Fact C): non-string -> fallback
+    # t4 (Fact D): missing -> fallback
+    client_edge = _make_fake_llm_client(
+        [
+            {
+                "items": [
+                    {"id": "t0", "text": "Andra [2], första [1] och igen [1]."},
+                    {"id": "t1", "text": "Fakta A1"},
+                    {"id": "t1", "text": "Fakta A2"},
+                    {"id": "t2", "text": "   \n  "},
+                    {"id": "t3", "text": 42},
+                ]
+            }
+        ]
+    )
+    variant, stats = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        ui="sv",
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_edge,
+        embed_fn=lambda _: (_ for _ in ()).throw(AssertionError("no embed")),
+    )
+    assert variant["answer"] == "Andra [2], första [1] och igen [1]."
+    assert [f["text"] for f in variant["facts"]] == ["Fact A", "Fact B", "Fact C", "Fact D"]
+    assert stats.translate_fallbacks == 4
+    assert stats.wrote_cache is True
+
+    # If ALL strings fail validation (e.g. t0 drops one [1] and t1..t4 missing) -> no cache write + RuntimeError
+    store["cache"].pop(q_sv_hash, None)
+    client_all_bad = _make_fake_llm_client(
+        [{"items": [{"id": "t0", "text": "Andra [2] och [1]"}]}]  # missing second [1]
+    )
+    with pytest.raises(RuntimeError):
+        ask.build_and_cache_ask(
+            q=q,
+            force=True,
+            ui="sv",
+            rag_opener=lambda: FakeConnection(store),
+            llm_client=client_all_bad,
+            embed_fn=lambda _: (_ for _ in ()).throw(AssertionError("no embed")),
+        )
+    assert q_sv_hash not in store["cache"]
+
+    # Cold default path: when default is NOT cached yet, building ui="sv" builds default first, then translates once.
+    cold_store = _sample_store(with_history=False)
+    q_cold = "Who was Carl Ludvig Engel?"
+    client_cold = _make_fake_llm_client(
+        [
+            # 1st call: default current answer
+            {
+                "found": True,
+                "answer": "Carl Ludvig Engel was an architect [1].",
+                "facts": [
+                    {
+                        "text": "German-Finnish architect",
+                        "source_sentence": "Carl Ludvig Engel var en tysk-finländsk arkitekt.",
+                        "n": 1,
+                    }
+                ],
+            },
+            # 2nd call: batched translation into Finnish
+            {
+                "items": [
+                    {"id": "t0", "text": "Carl Ludvig Engel oli arkkitehti [1]."},
+                    {"id": "t1", "text": "Saksalais-suomalainen arkkitehti"},
+                ]
+            },
+        ]
+    )
+    variant_fi, stats_fi = ask.build_and_cache_ask(
+        q=q_cold,
+        force=False,
+        ui="fi",
+        rag_opener=lambda: FakeConnection(cold_store),
+        llm_client=client_cold,
+        embed_fn=lambda texts: ([[0.5, 0.5]], 4),
+    )
+    assert ask.question_hash(q_cold) in cold_store["cache"]
+    assert ask.question_hash(q_cold, ui="fi") in cold_store["cache"]
+    assert variant_fi["out_lang"] == "fi"
+    assert variant_fi["facts"][0]["source_sentence"] == "Carl Ludvig Engel var en tysk-finländsk arkitekt."
+    assert len(client_cold.recorded_calls) == 2
+    assert stats_fi.total_llm_calls == 1
+    assert stats_fi.history_llm_calls == 0
+
+    # Second call with force=False hits ui cache (0 LLM calls)
+    variant_hit, stats_hit = ask.build_and_cache_ask(
+        q=q_cold,
+        force=False,
+        ui="fi",
+        rag_opener=lambda: FakeConnection(cold_store),
+        llm_client=client_cold,
+        embed_fn=lambda _: (_ for _ in ()).throw(AssertionError("no embed on cache hit")),
+    )
+    assert stats_hit.cached_hit is True
+    assert stats_hit.total_llm_calls == 0
+    assert variant_hit == variant_fi
