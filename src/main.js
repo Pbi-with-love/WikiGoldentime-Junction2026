@@ -159,6 +159,8 @@ async function init() {
 
     async onSelectAsOfYear(pageId, yearInt) {
       stopIntroSweep({ jumpToEnd: false });
+      // Prevent sliderCtrl.setYear's synchronous onYearChange from launching a duplicate openStarArticle.
+      lastPanelYear = yearInt;
       sliderCtrl?.setYear(yearInt);
       await openStarArticle("fi", Number(pageId), {
         glide: false,
@@ -669,13 +671,31 @@ async function init() {
     }
 
     const endLoading = beginLoading();
+    const targetYear = Math.round(options.asofYear ?? currentYear);
+    const requestedTab = options.openTab || activeArticleTab;
+    const expectHistory = Boolean(star.has_history);
+
+    const articleP = getArticle(lang, pageId);
+    const threadsP = getThreads(lang, pageId).catch(() => ({ threads: [] }));
+    const timelineP = expectHistory ? getArticleTimeline(pageId) : null;
+    const asofP = expectHistory ? getAsOf(pageId, `${targetYear}-12-31`) : null;
+    const diffP =
+      asofP !== null
+        ? Promise.all([articleP, asofP]).then(([art, asofRes]) =>
+            art?.has_history && asofRes ? getDiff(pageId, asofRes.rev_id, art.rev_id) : null
+          )
+        : null;
+
     try {
-      const targetYear = Math.round(options.asofYear ?? currentYear);
-      const [article, threadsRes] = await Promise.all([
-        getArticle(lang, pageId),
-        // Threads are optional mock fixtures; missing non-fixture stars must not block opening Dataset M/S articles.
-        getThreads(lang, pageId).catch(() => ({ threads: [] })),
-      ]);
+      let article;
+      let timeline = null;
+      let asof = null;
+
+      if (requestedTab === "history" && expectHistory) {
+        [article, timeline, asof] = await Promise.all([articleP, timelineP, asofP]);
+      } else {
+        article = await articleP;
+      }
       if (articleSeq !== articleLoadSeq) return;
 
       if (article && star) {
@@ -686,6 +706,38 @@ async function init() {
           article.words = star.words;
         }
       }
+
+      // Open the panel as soon as the article (and asof/timeline when on Through Time) is ready.
+      endLoading();
+      ui.openArticlePanel({
+        article,
+        timeline,
+        asof,
+        diff: null,
+        threads: [],
+        selectedYear: targetYear,
+        openTab: requestedTab,
+      });
+
+      const finalTimelineP =
+        timelineP ?? (article.has_history ? getArticleTimeline(pageId) : Promise.resolve(null));
+      const finalAsofP =
+        asofP ?? (article.has_history ? getAsOf(pageId, `${targetYear}-12-31`) : Promise.resolve(null));
+      const finalDiffP =
+        diffP ??
+        (article.has_history
+          ? finalAsofP.then((asofRes) =>
+              asofRes ? getDiff(pageId, asofRes.rev_id, article.rev_id) : null
+            )
+          : Promise.resolve(null));
+
+      const [threadsRes, finalTimeline, finalAsof, diff] = await Promise.all([
+        threadsP,
+        finalTimelineP,
+        finalAsofP,
+        finalDiffP,
+      ]);
+      if (articleSeq !== articleLoadSeq) return;
 
       const visitedKeys = new Set(
         constellationPath
@@ -701,32 +753,21 @@ async function init() {
         sceneCtrl?.setThreads(star, filteredThreads, targetYear);
       }
 
-      let timeline = null;
-      let asof = null;
-      let diff = null;
-
-      if (article.has_history) {
-        timeline = await getArticleTimeline(pageId);
-        if (articleSeq !== articleLoadSeq) return;
-        asof = await getAsOf(pageId, `${targetYear}-12-31`);
-        if (articleSeq !== articleLoadSeq) return;
-        if (asof) {
-          diff = await getDiff(pageId, asof.rev_id, article.rev_id);
-          if (articleSeq !== articleLoadSeq) return;
-        }
+      if (article.has_history || filteredThreads.length > 0) {
+        ui.openArticlePanel({
+          article,
+          timeline: finalTimeline,
+          asof: finalAsof,
+          diff,
+          threads: filteredThreads,
+          selectedYear: targetYear,
+          openTab: ui.isPanelOpen() ? ui.getActivePanelTab() : requestedTab,
+        });
       }
-
-      endLoading();
-      ui.openArticlePanel({
-        article,
-        timeline,
-        asof,
-        diff,
-        threads: filteredThreads,
-        selectedYear: targetYear,
-        openTab: options.openTab || activeArticleTab,
-      });
     } catch (err) {
+      timelineP?.catch(() => {});
+      asofP?.catch(() => {});
+      diffP?.catch(() => {});
       if (articleSeq !== articleLoadSeq) return;
       ui.showError(t("error.network"));
     } finally {

@@ -5,14 +5,17 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import difflib
+from functools import lru_cache
 import html
 import json
+import logging
 import math
 import os
 from pathlib import Path
 import re
 import sys
 import threading
+import time
 from typing import Any
 import urllib.parse
 
@@ -34,6 +37,8 @@ if svt_common.DB["port"] == 3308 and os.environ.get("DB_PORT") != "3308":
     svt_common.DB["port"] = int(os.environ.get("SVT_DB_PORT", 3307))
 elif "SVT_DB_PORT" in os.environ:
     svt_common.DB["port"] = int(os.environ["SVT_DB_PORT"])
+
+logger = logging.getLogger("uvicorn.error")
 
 VALID_LANGS = ("fi", "sv", "en")
 DIST_DIR = REPO_ROOT / "dist"
@@ -391,9 +396,76 @@ def _resolve_diff_side(cur: mariadb.Cursor, page_id: int, param: str | None) -> 
     return history.as_of(cur, page_id, moment)
 
 
+def _prewarm_asof_diff() -> None:
+    """Best-effort startup pre-warm of Talvisota (fi:1256) asof/diff cache entries."""
+    t0 = time.perf_counter()
+    warmed = 0
+    failed = 0
+    today_rev: str | None = None
+
+    try:
+        con = _open_rag()
+        try:
+            cur = con.cursor()
+            try:
+                cur.execute(
+                    "SELECT rev_id FROM wikirag.article WHERE lang = ? AND page_id = ? LIMIT 1",
+                    ("fi", 1256),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    today_rev = str(int(row[0]))
+            finally:
+                cur.close()
+        finally:
+            con.close()
+    except Exception:
+        failed += 1
+        logger.warning("Pre-warm failed querying today rev_id for fi:1256", exc_info=True)
+
+    asof_revs: dict[str, str] = {}
+    for at_val in ("2006-12-31", "2026-12-31"):
+        try:
+            payload = _get_asof_cached(1256, _normalize_at(at_val))
+            asof_revs[at_val] = str(payload["rev_id"])
+            warmed += 1
+        except Exception:
+            failed += 1
+            logger.warning("Pre-warm failed for /api/asof/1256?at=%s", at_val, exc_info=True)
+
+    if today_rev is not None:
+        from_revs = ["1862876", "2114325"]
+        rev_2026 = asof_revs.get("2026-12-31")
+        if rev_2026 and rev_2026 not in from_revs and rev_2026 != today_rev:
+            from_revs.append(rev_2026)
+        for from_rev in from_revs:
+            try:
+                _get_diff_cached(1256, from_rev, today_rev)
+                warmed += 1
+            except Exception:
+                failed += 1
+                logger.warning(
+                    "Pre-warm failed for /api/diff/1256?from=%s&to=%s",
+                    from_rev,
+                    today_rev,
+                    exc_info=True,
+                )
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    logger.info(
+        "Pre-warmed asof/diff cache for fi:1256 (today=%s, warmed=%d, failed=%d, %.0f ms)",
+        today_rev,
+        warmed,
+        failed,
+        elapsed_ms,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _get_stars_payload()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        threading.Thread(target=_prewarm_asof_diff, name="prewarm-asof-diff", daemon=True).start()
     yield
 
 
@@ -595,9 +667,7 @@ def get_article_timeline(page_id: int):
     }
 
 
-@app.get("/api/asof/{page_id}")
-def get_asof(page_id: int, at: str | None = None):
-    moment = _normalize_at(at)
+def _build_asof_payload(page_id: int, moment: str) -> dict[str, Any]:
     con = _open_svt()
     try:
         cur = con.cursor()
@@ -625,12 +695,21 @@ def get_asof(page_id: int, at: str | None = None):
     }
 
 
-@app.get("/api/diff/{page_id}")
-def get_diff(
-    page_id: int,
-    from_param: str = Query(..., alias="from"),
-    to_param: str | None = Query(default=None, alias="to"),
-):
+# shortcut: process-lifetime cache, restart api after data reloads
+@lru_cache(maxsize=256)
+def _get_asof_cached(page_id: int, moment: str) -> dict[str, Any]:
+    return _build_asof_payload(page_id, moment)
+
+
+@app.get("/api/asof/{page_id}")
+def get_asof(page_id: int, at: str | None = None):
+    moment = _normalize_at(at)
+    if at is None:
+        return _build_asof_payload(page_id, moment)
+    return _get_asof_cached(page_id, moment)
+
+
+def _build_diff_payload(page_id: int, from_param: str, to_param: str | None) -> dict[str, Any]:
     con = _open_svt()
     try:
         cur = con.cursor()
@@ -648,6 +727,24 @@ def get_diff(
     old_blocks = _clean_blocks(from_row["text"])
     new_blocks = _clean_blocks(to_row["text"])
     return {"parts": _diff_blocks(old_blocks, new_blocks)}
+
+
+# shortcut: process-lifetime cache, restart api after data reloads
+@lru_cache(maxsize=256)
+def _get_diff_cached(page_id: int, from_param: str, to_param: str) -> dict[str, Any]:
+    return _build_diff_payload(page_id, from_param, to_param)
+
+
+@app.get("/api/diff/{page_id}")
+def get_diff(
+    page_id: int,
+    from_param: str = Query(..., alias="from"),
+    to_param: str | None = Query(default=None, alias="to"),
+):
+    from_key = from_param.strip()
+    if to_param is None:
+        return _build_diff_payload(page_id, from_key, None)
+    return _get_diff_cached(page_id, from_key, to_param.strip())
 
 
 @app.get("/api/summary/{lang}/{page_id}")
