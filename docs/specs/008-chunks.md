@@ -4,6 +4,15 @@ Read docs/memory/ARCHITECTURE.md first (Infrastructure: SSH command, container n
 client, Ollama bge-m3 options, "bulk embedding on a Mac through an SSH tunnel", tmux rules, "never touch
 the organizers' apps"; Schemas; Rules: vector-search subquery pattern; Chunking paragraph).
 
+> **Orchestrator decision (2026-11-14) — overrides every "Mac" / "tunnel" / "digest" line below:**
+> embedding runs **on the VPS**, not the Mac (the Mac has no Ollama). `embed_chunks.py` and `chunk.py`
+> run on the VPS against the VPS Ollama (127.0.0.1:11434, same bge-m3 as the existing article
+> vectors, so no digest check) and 3307 directly — no SSH tunnel. Run the embed in
+> `tmux new -d -s embed 'nice -n 10 ...'` with ONE request at a time (2 vCPU; the organizers' :8000 and
+> request-time embedding must stay usable). Expect hours; overnight is fine. Embed fi first, then sv,
+> en; resumable, so a kill/restart mid-run is the resume proof. Report chunks/s after the first 10 min
+> and the projected total; if projected total > 10 h, send a `question` before continuing past fi.
+
 ## Goal
 Split every `wikirag.article` into section chunks, embed them with bge-m3 on the Mac, store them in
 `wikirag.chunk` + `wikirag.chunk_vector`, then measure retrieval on the organizers' 37 test questions:

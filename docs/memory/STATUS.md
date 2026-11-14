@@ -36,7 +36,7 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 005-history-stats | spec ready (adds global_month_stats) |
 - 006-api-core | spec ready (wires article_image -> null until 007; loads ~/wikimemory/.env) |
 - 007-fetch-images | spec ready (adds license, artist columns) |
-- 008-chunks | spec ready (needs bge-m3 on the Mac with same digest as VPS 790764642607) |
+- 008-chunks | spec ready (embed on VPS overnight, tmux embed, nice) |
 - 009-api-summary | spec ready |
 - 010-api-ask | spec ready (hero demo, Way A) |
 
