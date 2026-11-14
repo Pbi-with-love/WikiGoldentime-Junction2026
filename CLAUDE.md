@@ -8,7 +8,7 @@ Read both before writing a new spec.
 - **Claude (Opus 5.5) main session = orchestrator.** Dispatches, reviews, merges, updates STATUS. Never writes feature code; never becomes a subagent (it must end its turn so Orca can wake it).
 - **`spec-writer` / `researcher` = Claude subagents** (Opus / Haiku). Spec-writer writes `docs/specs/*`; researcher writes `docs/memory/research/*`.
 - **Antigravity (Argon) = design only** (`--agent antigravity`, rules in `GEMINI.md`). Writes a design handoff file; no code, no tests.
-- **Antigravity (Gemini 4 Hydrogen, effort high) = everything else** (`--agent antigravity --model hydrogen --effort high`, rules in `HYDROGEN.md`): code, tests, `playwright-cli`, integration.
+- **Antigravity (Gemini 4 Hydrogen, effort high) = everything else** (`--agent antigravity --model gemini-4-hydrogen-high`; plain `--model hydrogen` ignores `--effort` and runs XHigh, rules in `HYDROGEN.md`): code, tests, `playwright-cli`, integration.
 
 ## Workflow (sequential, one worker at a time)
 0. Topic/tech unclear -> orchestrator calls `researcher` first. (Subagents can't spawn subagents, so the orchestrator calls researcher, then spec-writer.)
@@ -17,7 +17,7 @@ Read both before writing a new spec.
    `orca orchestration worker-start --spec "Read GEMINI.md, then docs/specs/NNN-<slug>.md. Design only. Write the handoff to docs/design/NNN-<slug>.md." --worktree current --agent antigravity`
    Non-UI spec: skip this step.
 3. **Implementation step.** Dispatch Hydrogen, then **end the turn**:
-   `orca orchestration worker-start --spec "Read HYDROGEN.md, then docs/specs/NNN-<slug>.md (and docs/design/NNN-<slug>.md if it exists). Implement it." --worktree current --agent antigravity --model hydrogen --effort high`
+   `orca orchestration worker-start --spec "Read HYDROGEN.md, then docs/specs/NNN-<slug>.md (and docs/design/NNN-<slug>.md if it exists). Implement it." --worktree current --agent antigravity --model gemini-4-hydrogen-high`
    Always begin the spec text with "Read GEMINI.md" / "Read HYDROGEN.md": both workers are Antigravity and auto-read `GEMINI.md`, not `HYDROGEN.md`, so name the file explicitly.
 4. On wake: answer `question`s with `orca orchestration reply`; steer with `orca orchestration send --to dispatch:<id>`. Never poll.
 5. On `worker_done`: check the evidence against the spec (files in scope, test command + counts, screenshots if UI). Re-run tests yourself only when evidence is missing or contradictory. Fixes go back to the worker via `send`.
@@ -26,7 +26,7 @@ Read both before writing a new spec.
 ## Parallel / multi-task (only when you choose it)
 Guide: `orca skills get orchestration` (+ `--reference references/coordinator-loop.md`).
 - Two or more workers at once: each gets `--worktree new-child --name <slug>`. Commit `docs/specs/`, `docs/design/`, `docs/memory/` first (a new worktree only sees committed files). After a worker settles: merge its branch into `main` yourself, then `worker-release`.
-- DAG: `run-create --objective ...`, `task-create --spec ... --deps '[]'`, `task-list --ready --brief`, `worker-start --task <id> --worktree current --agent antigravity` (add `--model hydrogen --effort high` for the implementation task). Make the Hydrogen task depend on its Argon design task. On every wake start every ready Task, then end the turn.
+- DAG: `run-create --objective ...`, `task-create --spec ... --deps '[]'`, `task-list --ready --brief`, `worker-start --task <id> --worktree current --agent antigravity` (add `--model gemini-4-hydrogen-high` for the implementation task). Make the Hydrogen task depend on its Argon design task. On every wake start every ready Task, then end the turn.
 - Later `run-create` keeps older Runs; pass `--run <id>` for non-newest ones.
 - Workers' internal subagents are their business: Claude sees one `worker_done` per Task.
 - Stuck/failed worker: `worker-show`, `worker-read`, then `send`; see `--reference references/recovery-and-cleanup.md`. Never mark a failed Task completed.
