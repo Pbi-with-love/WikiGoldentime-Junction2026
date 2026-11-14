@@ -1,0 +1,418 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  getStars,
+  search,
+  getArticle,
+  getArticleTimeline,
+  getGlobalTimeline,
+  getAsOf,
+  getDiff,
+  ask,
+  getThreads,
+  getRoad,
+} from "../api.js";
+import { setMockConfig } from "./index.js";
+import { ANNUAL_VERSIONS_CALIBRATION } from "./fixtures.js";
+
+// Keep contract tests fast while still testing latency and error modes explicitly
+setMockConfig({ error: false, latency: false });
+
+test("GET /api/stars respects Dataset S & M exact counts, keys, and verbatim examples", async () => {
+  const stars = await getStars();
+  assert.equal(stars.length, 29460, "Total stars must be 29,460");
+
+  const counts = { fi: 0, sv: 0, en: 0 };
+  let nullWikidata = 0;
+  let historyCount = 0;
+  const pkSet = new Set();
+  const langsByWikidata = new Map();
+  const starByKey = new Map();
+
+  for (const s of stars) {
+    assert.ok(["fi", "sv", "en"].includes(s.lang));
+    counts[s.lang]++;
+
+    const pk = `${s.lang}:${s.page_id}`;
+    assert.ok(!pkSet.has(pk), `Duplicate primary key ${pk}`);
+    pkSet.add(pk);
+    starByKey.set(pk, s);
+
+    assert.equal(typeof s.title, "string");
+    assert.ok(s.url.startsWith(`https://${s.lang}.wikipedia.org/wiki/`));
+    assert.equal(typeof s.length, "number");
+    assert.ok(s.length >= 12);
+    assert.ok(s.category === null || typeof s.category === "string");
+    assert.equal(typeof s.x, "number");
+    assert.equal(typeof s.y, "number");
+    assert.equal(typeof s.z, "number");
+    assert.equal(typeof s.event_year, "number");
+    assert.ok(s.lat === null || typeof s.lat === "number");
+    assert.ok(s.lon === null || typeof s.lon === "number");
+    assert.equal(typeof s.has_history, "boolean");
+
+    if (s.has_history) {
+      historyCount++;
+      assert.equal(s.lang, "fi", "Only Finnish articles have history");
+      assert.equal(typeof s.first_edit_year, "number");
+    } else {
+      assert.equal(s.first_edit_year, null, "first_edit_year must be null unless has_history");
+    }
+
+    if (s.wikidata_id === null) {
+      nullWikidata++;
+    } else {
+      assert.match(s.wikidata_id, /^Q\d+$/);
+      if (!langsByWikidata.has(s.wikidata_id)) {
+        langsByWikidata.set(s.wikidata_id, new Set());
+      }
+      langsByWikidata.get(s.wikidata_id).add(s.lang);
+    }
+  }
+
+  assert.equal(counts.fi, 19285);
+  assert.equal(counts.sv, 4921);
+  assert.equal(counts.en, 5254);
+  assert.equal(nullWikidata, 410);
+  assert.equal(historyCount, 50);
+
+  let trilingualCount = 0;
+  for (const langSet of langsByWikidata.values()) {
+    if (langSet.size === 3) trilingualCount++;
+  }
+  assert.equal(trilingualCount, 2919, "Exactly 2,919 topics exist in all three languages");
+
+  // Verbatim examples
+  const verbatimExpected = [
+    ["fi", 1256, "Q134949", "Talvisota", 78984],
+    ["sv", 23612, "Q134949", "Vinterkriget", 20567],
+    ["en", 33924, "Q134949", "Winter War", 113996],
+    ["fi", 52097, "Q695285", "Moskovan rauhansopimus (1940)", 13219],
+    ["sv", 426533, "Q695285", "Moskvafreden", 2425],
+    ["en", 288706, "Q695285", "Moscow Peace Treaty", 4867],
+    ["fi", 1150, "Q211855", "Suomen sisällissota", 124377],
+    ["sv", 8414, "Q211855", "Finska inbördeskriget", 33282],
+    ["en", 11772, "Q211855", "Finnish Civil War", 83931],
+  ];
+
+  for (const [lang, page_id, qid, title, len] of verbatimExpected) {
+    const found = starByKey.get(`${lang}:${page_id}`);
+    assert.ok(found, `Missing verbatim article ${lang}:${page_id}`);
+    assert.equal(found.wikidata_id, qid);
+    assert.equal(found.title, title);
+    assert.equal(found.length, len);
+  }
+
+  // Named has_history=true Finnish articles
+  const requiredHistoryIds = [
+    1256, 1150, 440, 52097, 6021, 1275, 11446, 7650, 11444, 11477,
+    6816, 34207, 162670, 8901, 11113, 18861, 11803, 218476, 9564, 5261,
+  ];
+  for (const pid of requiredHistoryIds) {
+    const st = starByKey.get(`fi:${pid}`);
+    assert.ok(st && st.has_history, `fi:${pid} must have has_history=true`);
+  }
+});
+
+test("GET /api/search returns rows with cosine distance and 'also' language map", async () => {
+  const res = await search("Talvisota", "", 10);
+  assert.ok(Array.isArray(res.rows));
+  assert.ok(res.rows.length > 0 && res.rows.length <= 10);
+
+  const first = res.rows[0];
+  assert.equal(typeof first.lang, "string");
+  assert.equal(typeof first.page_id, "number");
+  assert.equal(typeof first.title, "string");
+  assert.equal(typeof first.url, "string");
+  assert.ok(first.distance >= 0.35 && first.distance <= 0.65);
+
+  if (res.rows.length >= 2) {
+    assert.ok(Math.abs(res.rows[1].distance - res.rows[0].distance) < 0.01);
+  }
+
+  assert.equal(typeof res.also, "object");
+  assert.ok(Array.isArray(res.also.Q134949));
+  assert.equal(res.also.Q134949.length, 2);
+});
+
+test("GET /api/article/{lang}/{page_id} returns exact article shape with Markdown and ISO UTC date", async () => {
+  const art = await getArticle("fi", 1256);
+  assert.equal(art.lang, "fi");
+  assert.equal(art.page_id, 1256);
+  assert.equal(typeof art.rev_id, "number");
+  assert.equal(art.wikidata_id, "Q134949");
+  assert.equal(art.title, "Talvisota");
+  assert.match(art.date_modified, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.ok(art.text.startsWith("# Talvisota\n"));
+  assert.ok(Array.isArray(art.categories) && art.categories.length > 0);
+  assert.ok(Array.isArray(art.other_languages) && art.other_languages.length === 2);
+  assert.equal(art.has_history, true);
+  assert.equal(typeof art.thumb_url, "string");
+  assert.equal(typeof art.thumb_file, "string");
+});
+
+test("GET /api/timeline and GET /api/timeline/{page_id} match calibrated versions and 404 rules", async () => {
+  const globalTl = await getGlobalTimeline();
+  assert.ok(Array.isArray(globalTl.months) && globalTl.months.length > 200);
+
+  const byYear = {};
+  for (const m of globalTl.months) {
+    assert.match(m.month, /^\d{4}-\d{2}$/);
+    const y = Number(m.month.slice(0, 4));
+    byYear[y] = (byYear[y] || 0) + m.edits;
+  }
+  for (const [yearStr, expected] of Object.entries(ANNUAL_VERSIONS_CALIBRATION)) {
+    assert.equal(byYear[Number(yearStr)], expected, `Year ${yearStr} version count mismatch`);
+  }
+
+  // Demo Path B: Talvisota timeline
+  const talviTl = await getArticleTimeline(1256);
+  assert.equal(talviTl.summary.versions, 2143);
+  assert.equal(talviTl.summary.reverts, 328);
+  assert.ok(talviTl.summary.war_months >= 1);
+  assert.match(talviTl.summary.first_edit, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.ok(talviTl.months.some((m) => m.disputes >= 3));
+
+  const sisallisTl = await getArticleTimeline(1150);
+  assert.equal(sisallisTl.summary.versions, 3357);
+
+  // Non-history article must 404
+  await assert.rejects(
+    () => getArticleTimeline(23612),
+    (err) => err.status === 404
+  );
+});
+
+test("GET /api/asof/{page_id} and GET /api/diff/{page_id} support Demo Path B (2006 / 2012 / today)", async () => {
+  const asof2006 = await getAsOf(1256, "2006-06-01 00:00:00");
+  const asof2012 = await getAsOf(1256, "2012-06-01 00:00:00");
+  const asofToday = await getAsOf(1256, "2026-06-01 00:00:00");
+
+  assert.notEqual(asof2006.rev_id, asof2012.rev_id);
+  assert.notEqual(asof2012.rev_id, asofToday.rev_id);
+  assert.equal(asofToday.row_end, null);
+  assert.ok(Array.isArray(asof2006.blocks) && asof2006.blocks.length > 0);
+  for (const [tag, txt] of asof2006.blocks) {
+    assert.ok(["h", "li", "p"].includes(tag));
+    assert.equal(typeof txt, "string");
+  }
+
+  // Before creation -> 404
+  await assert.rejects(
+    () => getAsOf(52097, "2003-01-01 00:00:00"),
+    (err) => err.status === 404
+  );
+
+  // Word diff
+  const diff = await getDiff(1256, asof2006.rev_id, asofToday.rev_id);
+  assert.ok(Array.isArray(diff.parts) && diff.parts.length > 0);
+  assert.ok(diff.parts.some((p) => p.op === "edit" && Array.isArray(p.words)));
+});
+
+test("GET /api/ask supports Demo Path A (How did the Winter War end -> 52097, 3 milestones)", async () => {
+  const res = await ask("How did the Winter War end");
+  assert.ok(res.answer.includes("[mock]"));
+  assert.deepEqual(res.top, { lang: "fi", page_id: 52097 });
+  assert.equal(res.history_available, true);
+  assert.equal(res.milestones.length, 3);
+  assert.ok(res.sources.length >= 1);
+
+  for (const ms of res.milestones) {
+    assert.equal(typeof ms.from_year, "number");
+    assert.equal(typeof ms.to_year, "number");
+    assert.equal(typeof ms.answer, "string");
+    assert.equal(typeof ms.rev_id, "number");
+    assert.equal(typeof ms.user, "string");
+  }
+
+  // Non-history article ask returns history_available=false and empty milestones
+  const noHist = await ask("Vinterkriget");
+  assert.equal(noHist.history_available, false);
+  assert.deepEqual(noHist.milestones, []);
+});
+
+test("GET /api/threads supports Demo Path C (5-hop chain from 52097 with ghost thread)", async () => {
+  const visited = [];
+  let current = { lang: "fi", page_id: 52097 };
+
+  for (let hop = 0; hop < 5; hop++) {
+    const res = await getThreads(current.lang, current.page_id, visited);
+    assert.ok(Array.isArray(res.threads));
+    assert.ok(res.threads.length >= 1 && res.threads.length <= 4);
+
+    if (hop === 0) {
+      const ghost = res.threads.find((t) => t.type === "ghost");
+      assert.ok(ghost, "Hop 0 from 52097 must include a ghost thread");
+      assert.equal(ghost.first_year, 2007);
+      assert.equal(ghost.removed_year, 2014);
+    }
+
+    visited.push(current.page_id);
+    current = {
+      lang: res.threads[0].target.lang,
+      page_id: res.threads[0].target.page_id,
+    };
+  }
+
+  assert.equal(visited.length, 5);
+
+  // Source without history must not return ghost threads
+  const svThreads = await getThreads("sv", 23612, []);
+  assert.ok(svThreads.threads.every((t) => t.type !== "ghost"));
+});
+
+test("GET /api/road/{lang}/{page_id} returns station-based Talvitie fixtures (Talvisota 13 stations, Suomen sisällissota 11 stations, Moskovan rauhansopimus 5 stations)", async () => {
+  const talviRoad = await getRoad("fi", 1256);
+  assert.deepEqual(talviRoad.article, {
+    lang: "fi",
+    page_id: 1256,
+    wikidata_id: "Q134949",
+    title: "Talvisota",
+    url: "https://fi.wikipedia.org/wiki/Talvisota",
+    words: 8395,
+    reading_minutes: 35,
+    has_history: true,
+  });
+
+  // Also works with object argument
+  const talviRoadObj = await getRoad({ lang: "fi", page_id: 1256 });
+  assert.equal(talviRoadObj.stations.length, 13);
+
+  const expectedTalvi = [
+    [1, "Tausta", 2978, 12],
+    [2, "Joukot", 320, 2],
+    [3, "Suomen torjuntavoitot joulu- ja tammikuussa", 504, 2],
+    [4, "Puna-armeijan suurhyökkäys helmikuussa", 663, 3],
+    [5, "Moskovan rauha", 842, 4],
+    [6, "Osapuolten heikkoudet ja vahvuudet", 761, 3],
+    [7, "Talvisodan sotatalous Suomessa", 163, 1],
+    [8, "Osapuolten tappiot", 345, 2],
+    [9, "Alueluovutukset ja väestön uudelleensijoitus", 63, 1],
+    [10, "Ulkomaiden roolit ja apu", 399, 2],
+    [11, "Talvisodan seurauksista ja merkityksestä", 761, 3],
+    [12, "Kunniamerkit", 38, 1],
+    [13, "Talvisota taiteessa ja viihteessä", 117, 1],
+  ];
+
+  assert.equal(talviRoad.stations.length, 13);
+  for (let i = 0; i < expectedTalvi.length; i++) {
+    const [no, heading, words, mins] = expectedTalvi[i];
+    const st = talviRoad.stations[i];
+    assert.equal(st.no, no);
+    assert.equal(st.heading, heading);
+    assert.equal(st.words, words);
+    assert.equal(st.reading_minutes, mins);
+    assert.ok(st.summary.includes("[mock]"));
+    assert.ok(st.text.includes("[mock]"));
+    assert.ok(Array.isArray(st.facts) && st.facts.length <= 3);
+    assert.ok(Array.isArray(st.years));
+    assert.ok(Array.isArray(st.posts));
+    assert.ok(st.history && typeof st.history.added_year === "number");
+    assert.equal(typeof st.history.changes, "number");
+    assert.ok(Array.isArray(st.history.war_years));
+    assert.equal(st.lanes.fi, true);
+    assert.ok(st.lanes.sv === null || (st.lanes.sv >= 0 && st.lanes.sv <= 1));
+    assert.ok(st.lanes.en === null || (st.lanes.en >= 0 && st.lanes.en <= 1));
+    assert.ok(Array.isArray(st.branches) && st.branches.length <= 2);
+  }
+
+  assert.equal(talviRoad.stations[0].posts.length, 9);
+  assert.deepEqual(talviRoad.stations[11].years, []);
+  assert.equal(talviRoad.ghost_stations.length, 1);
+  assert.ok(talviRoad.ghost_stations[0].text.includes("[mock]"));
+
+  // Suomen sisällissota (1150) — 11 stations
+  const sisallisRoad = await getRoad("fi", 1150);
+  assert.equal(sisallisRoad.article.title, "Suomen sisällissota");
+  assert.equal(sisallisRoad.article.words, 13399);
+  assert.equal(sisallisRoad.article.reading_minutes, 56);
+  assert.equal(sisallisRoad.stations.length, 11);
+
+  const expectedSisallisWords = [163, 671, 4000, 858, 4500, 1420, 353, 420, 69, 81, 555];
+  sisallisRoad.stations.forEach((st, idx) => {
+    assert.equal(st.no, idx + 1);
+    assert.equal(st.words, expectedSisallisWords[idx]);
+  });
+  assert.deepEqual(sisallisRoad.stations[6].years, []);
+  assert.deepEqual(sisallisRoad.stations[9].years, []);
+  assert.equal(sisallisRoad.ghost_stations.length, 1);
+
+  // Moskovan rauhansopimus (1940) (52097) — 5 stations
+  const moskovaRoad = await getRoad("fi", 52097);
+  assert.equal(moskovaRoad.article.words, 2150);
+  assert.equal(moskovaRoad.stations.length, 5);
+  assert.equal(moskovaRoad.ghost_stations.length, 1);
+
+  // Short non-history article (sv:426533 Moskvafreden, length 2425 < 9000)
+  const shortRoad = await getRoad("sv", 426533);
+  assert.equal(shortRoad.article.has_history, false);
+  assert.ok(shortRoad.stations.length < 4 && shortRoad.article.words < 1500);
+  assert.ok(shortRoad.stations.every((st) => st.history === null));
+  assert.deepEqual(shortRoad.ghost_stations, []);
+});
+
+test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suomen sisällissota, Autonomian aika)", async () => {
+  const { getTopicRoad } = await import("../api.js");
+  const autonomia = await getTopicRoad({ category: "Autonomian aika" });
+  assert.equal(autonomia.topic.category, "Autonomian aika");
+  assert.ok(Array.isArray(autonomia.eras) && autonomia.eras.length >= 3);
+  assert.ok(Array.isArray(autonomia.events) && autonomia.events.length >= 10);
+  assert.ok(autonomia.events[0].summary_short.includes("[mock]"));
+
+  const talviTopic = await getTopicRoad({ lang: "fi", page_id: 1256 });
+  assert.equal(talviTopic.topic.title, "Talvisota");
+  assert.ok(talviTopic.events.length >= 10);
+
+  const sisallisTopic = await getTopicRoad({ lang: "fi", page_id: 1150 });
+  assert.equal(sisallisTopic.topic.title, "Suomen sisällissota");
+  assert.ok(sisallisTopic.events.length >= 10);
+});
+
+test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatkosota, and short-article overview-only responses", async () => {
+  const { getSummary } = await import("../api.js");
+
+  // 1. Talvisota (1256): 13 sections + 1 ghost_section
+  const talviSummary = await getSummary("fi", 1256);
+  assert.equal(talviSummary.article.title, "Talvisota");
+  assert.equal(talviSummary.article.words, 8395);
+  assert.equal(talviSummary.article.reading_minutes, 35);
+  assert.ok(talviSummary.tldr.includes("[mock]"));
+  assert.ok(Array.isArray(talviSummary.facts) && talviSummary.facts.length > 0 && talviSummary.facts.length <= 3);
+  assert.equal(talviSummary.sections.length, 13);
+  assert.equal(talviSummary.ghost_sections.length, 1);
+  for (const sec of talviSummary.sections) {
+    assert.ok(sec.one_line.includes("[mock]"));
+    assert.ok(sec.summary.includes("[mock]"));
+    assert.ok(sec.text.includes("[mock]"));
+    assert.ok(sec.history && typeof sec.history.changes === "number");
+  }
+
+  // 2. Suomen sisällissota (1150): 11 sections + 1 ghost_section
+  const sisallisSummary = await getSummary("fi", 1150);
+  assert.equal(sisallisSummary.article.title, "Suomen sisällissota");
+  assert.equal(sisallisSummary.sections.length, 11);
+  assert.equal(sisallisSummary.ghost_sections.length, 1);
+
+  // 3. Jatkosota (440): 10 real-structure sections + 1 ghost_section
+  const jatkoSummary = await getSummary("fi", 440);
+  assert.equal(jatkoSummary.article.title, "Jatkosota");
+  assert.equal(jatkoSummary.sections.length, 10);
+  assert.equal(jatkoSummary.sections[2].heading, "Hyökkäysvaihe");
+  assert.equal(jatkoSummary.sections[3].heading, "Asemasotavaihe");
+  assert.equal(jatkoSummary.ghost_sections.length, 1);
+  assert.ok(jatkoSummary.tldr.includes("[mock]"));
+
+  // 4. Short article (sv:426533 Moskvafreden, < 1,500 words / < 4 sections) -> Card 0 only (sections: [])
+  const shortSummary = await getSummary("sv", 426533);
+  assert.equal(shortSummary.article.title, "Moskvafreden");
+  assert.ok(shortSummary.tldr.includes("[mock]"));
+  assert.ok(Array.isArray(shortSummary.facts) && shortSummary.facts.length <= 3);
+  assert.deepEqual(shortSummary.sections, []);
+  assert.deepEqual(shortSummary.ghost_sections, []);
+});
+
+test("Simulated error mode (?mockError=1 / setMockConfig) rejects properly", async () => {
+  setMockConfig({ error: true, latency: false });
+  await assert.rejects(() => getStars(), /Simulated network error/);
+  setMockConfig({ error: false, latency: true });
+});

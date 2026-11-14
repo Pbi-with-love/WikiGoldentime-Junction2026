@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wikimemory — History of Finland on Wikipedia</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23101C33'/><circle cx='16' cy='16' r='6' fill='%23EEF2F6'/></svg>"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="kaamos-viewport">
+      <canvas id="galaxy-canvas" aria-label="3D galaxy of Wikipedia articles about the history of Finland"></canvas>
+
+      <!-- CSS3D Summary Trail layer -->
+      <div id="summary-css3d-layer" class="summary-css3d-layer" hidden></div>
+
+      <!-- 3D-projected labels for search results, threads, cluster roads, lens guides, and Talvitie road markers -->
+      <div id="projected-labels" class="projected-labels-layer" aria-live="polite"></div>
+
+      <!-- Cursor hover label -->
+      <div id="hover-label" class="hover-label" hidden></div>
+
+      <!-- 1A. Sky Top-left: wordmark, search/ask field, lens switcher, and left-aligned Ask / Search results overlay -->
+      <header id="sky-top-bar" class="top-bar">
+        <div class="top-bar-row">
+          <span class="wordmark">wikimemory</span>
+          <form id="search-form" class="search-form" role="search">
+            <label for="search-input" class="visually-hidden">Ask about the history of Finland</label>
+            <div class="search-input-wrap">
+              <input
+                id="search-input"
+                type="search"
+                class="search-input"
+                placeholder="Ask about the history of Finland…"
+                autocomplete="off"
+              />
+              <button
+                id="search-clear-btn"
+                type="button"
+                class="search-clear-btn"
+                aria-label="Clear search"
+                hidden
+              >
+                Clear
+              </button>
+            </div>
+            <button id="btn-ask" type="button" class="btn-control">Ask</button>
+            <button id="btn-search" type="submit" class="btn-control">Search</button>
+          </form>
+
+          <!-- Three Lenses switcher: Meaning (UMAP) / History (Spiral) / Geography (Finland Map) -->
+          <div id="lens-switcher" class="lens-switcher" role="group" aria-label="Galaxy layout lens">
+            <button type="button" class="lens-btn is-active" data-lens="meaning" aria-pressed="true">
+              Meaning
+            </button>
+            <button type="button" class="lens-btn" data-lens="history" aria-pressed="false">
+              History
+            </button>
+            <button type="button" class="lens-btn" data-lens="geography" aria-pressed="false">
+              Geography
+            </button>
+          </div>
+
+          <span id="status-loading" class="status-pill" role="status" hidden>Loading…</span>
+        </div>
+
+        <!-- Rehearsable prompts for the 3 demo paths + Talvitie winter road -->
+        <div class="demo-prompts" aria-label="Example queries">
+          <button type="button" class="prompt-chip" data-action="ask" data-query="How did the Winter War end">
+            How did the Winter War end?
+          </button>
+          <button type="button" class="prompt-chip" data-action="article" data-lang="fi" data-page-id="1256">
+            Talvisota (SVT history)
+          </button>
+          <button type="button" class="prompt-chip" data-action="threads" data-lang="fi" data-page-id="52097">
+            Moskovan rauhansopimus (5-hop threads)
+          </button>
+          <button type="button" class="prompt-chip" data-action="road" data-lang="fi" data-page-id="1256">
+            Talvitie: Talvisota
+          </button>
+        </div>
+
+        <!-- Empty or Error banner -->
+        <p id="search-feedback" class="search-feedback" role="status" hidden></p>
+
+        <!-- Search results list with "also in" language dots -->
+        <section id="search-results-panel" class="left-overlay-card search-results-panel" aria-label="Search results" hidden></section>
+
+        <!-- Grounded AI Ask card + "This answer changed N times" milestones + Memory Threads tree -->
+        <section id="ask-panel" class="left-overlay-card ask-panel" aria-label="Grounded answer" hidden></section>
+
+        <!-- Birch Constellation Path bar -->
+        <section id="constellation-bar" class="constellation-bar" aria-label="Memory constellation path" hidden></section>
+      </header>
+
+      <!-- 1B. Talvitie ("Winter Road") Top-left bar -->
+      <header id="road-top-bar" class="road-top-bar" aria-label="Talvitie winter road controls" hidden>
+        <div class="road-top-row">
+          <button id="btn-back-to-sky" type="button" class="btn-control btn-back-to-sky">
+            Back to the sky
+          </button>
+          <div class="road-topic-heading">
+            <span class="road-mode-tag">Talvitie</span>
+            <h1 id="road-topic-title" class="road-topic-title">Talvisota</h1>
+            <span id="road-topic-meta" class="road-topic-meta">10 historical milestones</span>
+          </div>
+          <div class="road-topic-switcher" role="group" aria-label="Switch winter road fixture">
+            <button type="button" class="prompt-chip road-topic-chip" data-road-lang="fi" data-road-page="1256" data-road-mode="topic">
+              Talvisota
+            </button>
+            <button type="button" class="prompt-chip road-topic-chip" data-road-lang="fi" data-road-page="1150" data-road-mode="topic">
+              Suomen sisällissota
+            </button>
+            <button type="button" class="prompt-chip road-topic-chip" data-road-category="Autonomian aika" data-road-mode="topic">
+              Autonomian aika
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Talvitie ("Winter Road") 3-card perspective stack (horizon strips above foreground station briefing card) -->
+      <section id="road-cards-stage" class="road-cards-stage" aria-label="Talvitie station briefing cards" hidden></section>
+
+      <!-- Single-article 3D Summary Trail HUD -->
+      <header id="summary-top-bar" class="summary-top-bar" aria-label="Summary Trail navigation" hidden>
+        <div class="summary-top-row">
+          <button id="summary-back-btn" type="button" class="btn-control btn-back-to-sky">
+            Back to the sky
+          </button>
+          <div class="summary-heading-group">
+            <span class="road-mode-tag">Summary Trail</span>
+            <h1 id="summary-trail-title" class="road-topic-title"></h1>
+            <span id="summary-trail-meta" class="road-topic-meta"></span>
+          </div>
+          <button id="summary-open-article-btn" type="button" class="btn-control summary-open-article-btn">
+            Open full article
+          </button>
+        </div>
+      </header>
+
+      <div id="summary-focused-overlay" class="summary-focused-overlay" hidden></div>
+
+      <footer id="summary-bottom-bar" class="summary-bottom-bar" aria-label="Summary Trail controls" hidden>
+        <button id="summary-prev-btn" type="button" class="btn-control summary-nav-btn">Previous</button>
+        <span id="summary-progress-text" class="summary-progress-text">Overview</span>
+        <button id="summary-next-btn" type="button" class="btn-control summary-nav-btn">Next</button>
+      </footer>
+
+      <!-- 2. Right: article panel, closed by default -->
+      <aside id="article-panel" class="article-panel" aria-labelledby="panel-title" hidden>
+        <figure id="panel-thumb-figure" class="panel-thumb-figure" hidden>
+          <img id="panel-thumb-img" class="panel-thumb-img" src="" alt="" />
+          <figcaption class="panel-thumb-caption">
+            <a id="panel-thumb-credit" class="panel-thumb-credit" href="https://commons.wikimedia.org" target="_blank" rel="noopener noreferrer"></a>
+          </figcaption>
+        </figure>
+
+        <div class="panel-header">
+          <h2 id="panel-title" class="panel-title"></h2>
+          <div class="panel-header-actions">
+            <button id="panel-summarize-btn" type="button" class="btn-control btn-primary panel-summarize-btn">
+              Summarize
+            </button>
+            <button id="panel-road-btn" type="button" class="btn-control panel-road-btn">
+              See as a road
+            </button>
+            <button id="panel-close-btn" type="button" class="btn-control panel-close-btn">Close</button>
+          </div>
+        </div>
+
+        <div id="panel-languages" class="panel-languages" aria-label="Language versions"></div>
+
+        <div id="panel-tabs" class="panel-tabs" role="tablist" aria-label="Article views">
+          <button
+            id="tab-btn-today"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            class="panel-tab-btn is-active"
+          >
+            Today
+          </button>
+          <button
+            id="tab-btn-history"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            class="panel-tab-btn"
+          >
+            Through time
+          </button>
+        </div>
+
+        <p id="panel-no-history" class="panel-no-history" hidden>
+          No edit history for this article yet.
+        </p>
+
+        <!-- Tab 1: Today (Markdown text + categories + Memory Threads) -->
+        <div id="tab-view-today" class="panel-tab-view" role="tabpanel">
+          <div id="panel-markdown" class="panel-body"></div>
+          <div id="panel-categories" class="panel-categories"></div>
+          <div id="panel-threads-section" class="panel-threads-section"></div>
+        </div>
+
+        <!-- Tab 2: Through time (only when has_history=true) -->
+        <div id="tab-view-history" class="panel-tab-view" role="tabpanel" hidden>
+          <div id="panel-svt-summary" class="panel-svt-summary"></div>
+          <div id="panel-svt-months" class="panel-svt-months" aria-label="Monthly edit timeline"></div>
+          <div class="panel-svt-presets" id="panel-svt-presets"></div>
+          <div id="panel-asof-meta" class="panel-asof-meta"></div>
+          <div id="panel-asof-blocks" class="panel-body"></div>
+          <div id="panel-diff-section" class="panel-diff-section"></div>
+        </div>
+
+        <div class="panel-footer">
+          <a
+            id="panel-wiki-link"
+            class="panel-wiki-link"
+            href="https://fi.wikipedia.org"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Read on Wikipedia</a>
+        </div>
+      </aside>
+
+      <!-- 4. Small legend bottom-left: three language dots + Edit war dot. Nothing else. -->
+      <aside id="sky-legend" class="legend" aria-label="Star color legend">
+        <span class="legend-item"><span class="dot dot-fi"></span>Finnish</span>
+        <span class="legend-item"><span class="dot dot-sv"></span>Swedish</span>
+        <span class="legend-item"><span class="dot dot-en"></span>English</span>
+        <span class="legend-item"><span class="dot dot-war"></span>Edit war</span>
+      </aside>
+
+      <!-- 3A. Bottom (Sky mode): THE signature element, the Wikipedia edit-history time slider -->
+      <section id="timeslider-root" class="timeslider-root" aria-label="Wikipedia history timeline 2003 to 2026"></section>
+
+      <!-- 3B. Bottom (Talvitie road mode): Proportional Table-of-Contents minimap -->
+      <section id="road-era-minimap" class="road-era-minimap" aria-label="Article sections table of contents minimap" hidden></section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
