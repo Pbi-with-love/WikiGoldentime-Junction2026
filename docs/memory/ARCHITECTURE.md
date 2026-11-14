@@ -27,8 +27,9 @@ offers related articles to keep reading. Judges are the authors of the organizer
     (and check parity anytime with `bash ~/wikimemory/db_merge.sh verify`).
 - Organizers' apps run in tmux: `app` (RAG search, 127.0.0.1:8000), `tm` (time machine,
   127.0.0.1:8001). **Never stop, restart or edit them**, nor their repos/venvs.
-- Dataset M: only 50 articles loaded (organizers' default demo); `data/dumps` holds 12 dumps, the full
-  set needs 4 more. Decision: build and test on the 50; rerun the pipeline when full M is loaded.
+- Dataset M: FULLY loaded 2026-11-14 into 3307 `wikihistory` (19,742 fi articles / 862,076 versions;
+  19,285 of them also in wikirag). 3308 keeps the organizers' 50 (their `tm` reads it); our backend uses 3307 only.
+  3307 CPU cap: `docker update --cpus 0` does NOT clear a cap, use `--cpus 2`.
 - Our own Python on the VPS: `~/wikimemory/` with its own `.venv` (never the organizers' venvs).
 - Ollama on 127.0.0.1:11434, model `bge-m3`; always `{"num_ctx": 8192, "num_batch": 8192}`.
   Request-time embedding only on the VPS (CPU). Bulk embedding (chunks, spec 008) runs
@@ -87,13 +88,21 @@ Each endpoint switches from mock to real on its own flag, after the contract tes
 | Table | DB | Used by | Built by |
 |---|---|---|---|
 | `article_coord(lang, page_id, x, y, z)` | wikirag | stars | `scripts/umap_coords.py` |
-| `article_image(lang, page_id, file_name, thumb_url, license, artist)` | wikirag | article | `scripts/fetch_images.py` |
+| `article_image(lang, page_id, file_name, thumb_url, license, artist, license_url, non_free, credit_checked_at)` | wikirag | article | `scripts/fetch_images.py` (`--credits-only` for credits; UA = repo URL) |
 | `history_stats(page_id, first_edit, versions, reverts, disputes, war_months)` | wikihistory | stars, timeline | `scripts/history_stats.py` |
 | `month_stats(page_id, month, edits, reverts, disputes)` | wikihistory | timeline | `scripts/history_stats.py` |
 | `global_month_stats(month, edits, reverts, disputes)` | wikihistory | timeline (global) | `scripts/history_stats.py` |
 | `chunk`, `chunk_vector` | wikirag | search, ask | `scripts/chunk.py`, `scripts/embed_chunks.py` |
-| `summary_cache(lang, page_id, rev_id, json)` | wikirag | summary | on demand + pre-warm |
-| `answer_cache(q_hash, json)` | wikirag | ask | on demand + pre-warm |
+| `summary_cache(lang, page_id, rev_id, ui, json, source_hash)` | wikirag | summary | on demand + pre-warm; ui='' = default row; ui rows = translations of the default (source_hash = sha256 of the default JSON, mismatch -> re-translate) |
+| `answer_cache(q_hash, q, ui, json, model, source_hash)` | wikirag | ask | same rule: ui variant = translation of the default answer, never a rebuild |
+| `section_history(page_id PK, rev_id, svt_rev_id, end_year, ..., json)` | wikihistory | summary (history + ghosts, history_status) | `scripts/section_history.py` (19,285 rows, resumable, no LLM) |
+| `chunk_vector_hist` (system-versioned, research only) | wikirag | none (Way B spike, kept for inspection) | `scripts/wayb_build.py` |
+| `snapshot_chunk_vector` | wikirag | Way B source | `scripts/snapshot_vectors.py` |
+
+Multilingual rule: native first (sv/en sibling by `wikidata_id` is its own source of truth), translation of
+the fi result second (label "Machine-translated from Finnish Wikipedia"); edit history only from fi.
+Cross-language compare: `GET /api/compare/fi/{page_id}` on request (best sv/en chunk per fi section,
+cosine threshold 0.35, see docs/memory/research/compare-threshold.md).
 
 Chunking: split by "##", then ~300 words with ~50 overlap, prefix "Title — Section"; articles shorter
 than one chunk reuse their existing article vector (≈12,870 of 19,285 fi); ≈22,800 chunks to embed.
