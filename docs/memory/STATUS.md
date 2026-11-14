@@ -37,6 +37,16 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
   project in the Orca UI and re-add it as git before the next parallel run.
 
+## User decisions 16:40 UTC (016)
+- article.wikidata_id index approved (worker found it already exists).
+- fi_history must not depend on the summary cache: 016 builds history+ghosts (SVT, no LLM) in the
+  background and returns history_status ready|building|none (UI: "Loading edit history…").
+- Spec 018: precompute section history + ghosts for all fi articles into a table; /api/summary reads it.
+  Order: 015 done -> 016 (running) -> 017 -> 018.
+- Native review: docs/i18n-review.csv (192 labels, key/en/fi/sv + fix columns), regenerate with
+  `node scripts/export_i18n_review.mjs > docs/i18n-review.csv` after 016/017 add labels.
+- 016 test article T = 966363 Suomi 1980-luvulla (real) / 306897 (mock).
+
 ## User decisions 16:10 UTC — multilingual is CORE (mentor asked; native sv/en articles exist)
 - Rule: native first, translation second. 016 Summarize multilingual (native sibling summary by
   wikidata_id; else translate fi text only, label "Machine-translated from Finnish Wikipedia", keep
@@ -107,6 +117,8 @@ license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3
 
 ## Specs
 - 014-display-fixes | done | html.unescape in /api/asof + /api/diff (0 '&ndash;' on asof 1256 @2006), Ask strip = milestones-1 changes, 1 milestone -> 'has not changed since {year}' fi/sv/en; npm test 16/16 (orchestrator rerun), VPS pytest 25/25, 5 screenshots artifacts/screenshots/014-display-fixes/ |
+- 016-summarize-multilingual | in progress (Hydrogen ctx_2be0ed17dd08; spec + amendment A) |
+- 017-cross-language-compare | spec + design done (docs/design/017-cross-language-compare.md); Hydrogen after 016 |
 - 015-ask-ui-translate-only | done | ui variant = deep copy of default + 1 batched translation call; hero en+fi identical milestones for ui /fi/sv/en (orchestrator curl, 2006 -> 1862876); 9 ui rows rebuilt (6 LLM calls, 0 fallbacks), +1 sv default row; pytest 24/24 + 9/9 VPS, npm test 16/16 mock + REAL=ask (orchestrator rerun mock), cache hit 2.4–3.0 ms. Known: same-language copy keeps milestone facts[].text in Finnish for en/sv questions -> fix in 016; summary ?ui= re-picks facts (8/14 sections of fi 1256 differ ui=en) -> 016 |
 <!-- id | state | evidence -->
 - kaamos-sky: 3D galaxy canvas (29,460 stars), Kaamos palette, search with "also" language dots, 2003–2026 edit-histogram time slider (`src/timeslider.js`), responsive article panel, `prefers-reduced-motion` | done | `docs/design/001-kaamos-sky.md`, `src/scene.js`, `src/ui.js`, `src/styles.css`; `artifacts/screenshots/001-kaamos-sky/` (7 PNGs); `npm run build` OK
