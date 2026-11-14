@@ -37,6 +37,12 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Orca: `orca repo add --kind git` returns the existing folder registration -> user must remove the
   project in the Orca UI and re-add it as git before the next parallel run.
 
+## 18:55 UTC — demo dry run done (docs/memory/research/demo-dryrun.md, DEMO.md updated)
+- Fixes running in parallel: 020 summary language + en/sv reference headings (Hydrogen high),
+  021 UI: search "also in" chips + 2006 milestone shows changed_by on the card (Claude Sonnet).
+- Known, not fixed: Moskovan rauha "Also in English" passage off-topic (compare recall/precision limit);
+  language switch hidden while a summary is open (by design, 013); milestone click 1.3–2.4 s.
+
 ## 18:42 UTC — frontend redeployed
 - VPS dist/ was stale since 12:13 (no worker deployed the frontend for 013–019; they tested with local vite).
   Rebuilt and rsynced: assets index-B7Rrqhmc.js / index-wcKiAZqL.css. Deploy step now in ARCHITECTURE.md.
