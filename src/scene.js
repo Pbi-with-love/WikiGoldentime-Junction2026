@@ -450,6 +450,27 @@ export function createGalaxyScene({
   const starByKey = new Map();
   const starsByWikidata = new Map();
   const editWarYearsByIndex = new Array(count);
+  const isUnlocatedStar = new Uint8Array(count);
+  let isPortraitGeo = typeof window !== "undefined" && window.innerWidth < window.innerHeight;
+
+  function getUnlocatedLayout(isPortrait) {
+    // On portrait viewports, tuck the unlocated nebula closer to Finland's west coast
+    // (clear of the outline) so the map keeps ~96% of safe height and core south cities don't collide.
+    return isPortrait
+      ? { cx: -10.0, cy: -3.5, rStars: 4.1, rCircle: 4.8, labelY: -9.4 }
+      : { cx: -24.5, cy: -3.5, rStars: 5.4, rCircle: 6.2, labelY: -10.8 };
+  }
+
+  function computeUnlocatedStarPoint(i, layout) {
+    const theta = (i * 2.39996) % (Math.PI * 2);
+    const phi = Math.acos(1 - 2 * ((i % 997) / 997));
+    const rUnloc = layout.rStars * Math.cbrt(((i * 31) % 500) / 500);
+    return [
+      layout.cx + rUnloc * Math.sin(phi) * Math.cos(theta),
+      layout.cy + rUnloc * Math.sin(phi) * Math.sin(theta),
+      rUnloc * Math.cos(phi),
+    ];
+  }
 
   // Precompute the 3 lens position buffers (meaning, history spiral, geography map) + road buffer
   const posMeaning = new Float32Array(count * 3);
@@ -516,12 +537,11 @@ export function createGalaxyScene({
       posGeography[i3 + 2] = gz;
     } else {
       // Unlocated articles gather into a compact spherical cluster on the left
-      const theta = (i * 2.39996) % (Math.PI * 2);
-      const phi = Math.acos(1 - 2 * ((i % 997) / 997));
-      const rUnloc = 5.4 * Math.cbrt(((i * 31) % 500) / 500);
-      posGeography[i3] = -24.5 + rUnloc * Math.sin(phi) * Math.cos(theta);
-      posGeography[i3 + 1] = -3.5 + rUnloc * Math.sin(phi) * Math.sin(theta);
-      posGeography[i3 + 2] = rUnloc * Math.cos(phi);
+      isUnlocatedStar[i] = 1;
+      const [ux, uy, uz] = computeUnlocatedStarPoint(i, getUnlocatedLayout(isPortraitGeo));
+      posGeography[i3] = ux;
+      posGeography[i3 + 1] = uy;
+      posGeography[i3 + 2] = uz;
     }
 
     const rgb = LANG_RGB[s.lang] || LANG_RGB.fi;
@@ -653,11 +673,16 @@ export function createGalaxyScene({
   });
   geographyGuideGroup.add(new THREE.Line(borderGeo, borderMat));
 
+  const initUnlocLayout = getUnlocatedLayout(isPortraitGeo);
   const unlocCirclePts = [];
   for (let a = 0; a <= 48; a++) {
     const ang = (a / 48) * Math.PI * 2;
     unlocCirclePts.push(
-      new THREE.Vector3(-24.5 + Math.cos(ang) * 6.2, -3.5 + Math.sin(ang) * 6.2, 0)
+      new THREE.Vector3(
+        initUnlocLayout.cx + Math.cos(ang) * initUnlocLayout.rCircle,
+        initUnlocLayout.cy + Math.sin(ang) * initUnlocLayout.rCircle,
+        0
+      )
     );
   }
   const unlocGeo = new THREE.BufferGeometry().setFromPoints(unlocCirclePts);
@@ -685,10 +710,186 @@ export function createGalaxyScene({
     const [gx, gy, gz] = latLonToGeoPoint(item.lat, item.lon, 0.4);
     return { label: item.label, pos: new THREE.Vector3(gx, gy, gz) };
   });
-  GEO_GUIDE_ANCHORS.push({
+  const unlocatedGuideAnchor = {
     label: t("scene.unlocated"),
-    pos: new THREE.Vector3(-24.5, -10.8, 0),
+    pos: new THREE.Vector3(initUnlocLayout.cx, initUnlocLayout.labelY, 0),
+  };
+  GEO_GUIDE_ANCHORS.push(unlocatedGuideAnchor);
+
+  const geoFramingBorderPts = FINLAND_BORDER_LATLON.flatMap(([lat, lon]) => {
+    const [x1, y1, z1] = latLonToGeoPoint(lat, lon, -0.2);
+    const [x2, y2, z2] = latLonToGeoPoint(lat, lon, 0.4);
+    return [new THREE.Vector3(x1, y1, z1), new THREE.Vector3(x2, y2, z2)];
   });
+
+  const UI_EXCLUSION_IDS = ["sky-top-bar", "timeslider-root", "article-panel", "lens-switcher", "lang-switcher"];
+  let cachedExclusionRects = [];
+  let cachedSafeArea = null;
+
+  function rectsIntersect(a, b, pad = 0) {
+    return !(
+      a.right + pad <= b.left ||
+      a.left - pad >= b.right ||
+      a.bottom + pad <= b.top ||
+      a.top - pad >= b.bottom
+    );
+  }
+
+  function refreshUiMetrics() {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const nextRects = [];
+    for (const id of UI_EXCLUSION_IDS) {
+      const el = document.getElementById(id);
+      if (!el || el.hidden) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      nextRects.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+    }
+    cachedExclusionRects = nextRects;
+
+    const margin = 8;
+    const headerEl = document.getElementById("sky-top-bar");
+    const sliderEl = document.getElementById("timeslider-root");
+    const headerRect = headerEl && !headerEl.hidden ? headerEl.getBoundingClientRect() : null;
+    const sliderRect = sliderEl && !sliderEl.hidden ? sliderEl.getBoundingClientRect() : null;
+    const safeTop = (headerRect && headerRect.height > 0 ? headerRect.bottom : 0) + margin;
+    const safeBottom = (sliderRect && sliderRect.height > 0 ? sliderRect.top : h) - margin;
+    const safeLeft = margin;
+    const safeRight = w - margin;
+    cachedSafeArea = {
+      left: safeLeft,
+      right: Math.max(safeLeft + 40, safeRight),
+      top: safeTop,
+      bottom: Math.max(safeTop + 40, safeBottom),
+    };
+
+    if (document.body) {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:fixed;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none;";
+      const allAnchors = [...HISTORY_GUIDE_ANCHORS, ...GEO_GUIDE_ANCHORS];
+      const spans = allAnchors.map((anc) => {
+        const span = document.createElement("span");
+        span.className = "projected-lens-guide";
+        span.textContent = anc.label;
+        probe.appendChild(span);
+        return { anc, span };
+      });
+      document.body.appendChild(probe);
+      for (const { anc, span } of spans) {
+        const r = span.getBoundingClientRect();
+        anc.boxW = r.width;
+        anc.boxH = r.height;
+      }
+      probe.remove();
+    }
+  }
+
+  function applyUnlocatedLayout(nextIsPortrait, syncActiveBuffers = false) {
+    if (nextIsPortrait === isPortraitGeo) return;
+    isPortraitGeo = nextIsPortrait;
+    const layout = getUnlocatedLayout(isPortraitGeo);
+    for (let i = 0; i < count; i++) {
+      if (!isUnlocatedStar[i]) continue;
+      const i3 = i * 3;
+      const [ux, uy, uz] = computeUnlocatedStarPoint(i, layout);
+      posGeography[i3] = ux;
+      posGeography[i3 + 1] = uy;
+      posGeography[i3 + 2] = uz;
+      if (syncActiveBuffers) {
+        positions[i3] = ux;
+        positions[i3 + 1] = uy;
+        positions[i3 + 2] = uz;
+        posTo[i3] = ux;
+        posTo[i3 + 1] = uy;
+        posTo[i3 + 2] = uz;
+      }
+    }
+    if (syncActiveBuffers) {
+      positionAttr.needsUpdate = true;
+      posToAttr.needsUpdate = true;
+      geometry.computeBoundingSphere();
+    }
+    const posAttr = unlocGeo.attributes.position;
+    for (let a = 0; a <= 48; a++) {
+      const ang = (a / 48) * Math.PI * 2;
+      posAttr.setXYZ(
+        a,
+        layout.cx + Math.cos(ang) * layout.rCircle,
+        layout.cy + Math.sin(ang) * layout.rCircle,
+        0
+      );
+    }
+    posAttr.needsUpdate = true;
+    unlocLine.computeLineDistances();
+    unlocatedGuideAnchor.pos.set(layout.cx, layout.labelY, 0);
+  }
+
+  function computeGeographyCameraPose() {
+    if (!cachedSafeArea) refreshUiMetrics();
+    const w = typeof window !== "undefined" ? window.innerWidth : 1280;
+    const h = typeof window !== "undefined" ? window.innerHeight : 720;
+    const safe = cachedSafeArea || { left: 8, right: w - 8, top: 8, bottom: h - 8 };
+    const layout = getUnlocatedLayout(isPortraitGeo);
+    const pts = [
+      ...geoFramingBorderPts,
+      new THREE.Vector3(
+        isPortraitGeo ? Math.min(layout.cx - layout.rCircle, layout.cx - 6.0) : layout.cx - layout.rCircle,
+        layout.cy,
+        0
+      ),
+      new THREE.Vector3(layout.cx + layout.rCircle, layout.cy, 0),
+      new THREE.Vector3(layout.cx, layout.cy - layout.rCircle, 0),
+      new THREE.Vector3(layout.cx, layout.cy + layout.rCircle, 0),
+      new THREE.Vector3(layout.cx, layout.cy, layout.rStars),
+      new THREE.Vector3(layout.cx, layout.cy, -layout.rStars),
+      new THREE.Vector3(layout.cx, layout.labelY - 1.1, 0),
+    ];
+
+    const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+    const k = (h * 0.5) / tanHalfFov;
+    const uLeft = (safe.left - w * 0.5) / k;
+    const uRight = (safe.right - w * 0.5) / k;
+    const vBottom = (h * 0.5 - safe.bottom) / k;
+    const vTop = (h * 0.5 - safe.top) / k;
+
+    const boundsForDist = (d) => {
+      let loX = -Infinity;
+      let hiX = Infinity;
+      let loY = -Infinity;
+      let hiY = Infinity;
+      for (const p of pts) {
+        const dz = d - p.z;
+        loX = Math.max(loX, p.x - uRight * dz);
+        hiX = Math.min(hiX, p.x - uLeft * dz);
+        loY = Math.max(loY, p.y - vTop * dz);
+        hiY = Math.min(hiY, p.y - vBottom * dz);
+      }
+      return { loX, hiX, loY, hiY };
+    };
+
+    let loD = 12;
+    let hiD = 320;
+    for (let iter = 0; iter < 40; iter++) {
+      const midD = (loD + hiD) * 0.5;
+      const b = boundsForDist(midD);
+      if (b.loX <= b.hiX && b.loY <= b.hiY) {
+        hiD = midD;
+      } else {
+        loD = midD;
+      }
+    }
+    const d = hiD;
+    const b = boundsForDist(d);
+    const cx = (b.loX + b.hiX) * 0.5;
+    const cy = (b.loY + b.hiY) * 0.5;
+    return {
+      cameraPos: new THREE.Vector3(cx, cy, d),
+      targetPos: new THREE.Vector3(cx, cy, 0),
+    };
+  }
 
   function clearGroup(group) {
     while (group.children.length > 0) {
@@ -1063,6 +1264,26 @@ export function createGalaxyScene({
     };
   }
 
+  function applyGeographyCameraPose({ immediate = false } = {}) {
+    const nextIsPortrait =
+      typeof window !== "undefined" && window.innerWidth < window.innerHeight;
+    applyUnlocatedLayout(nextIsPortrait, currentLens === "geography" && !inRoadMode && !inSummaryMode);
+    refreshUiMetrics();
+    const pose = computeGeographyCameraPose();
+    controls.maxDistance = Math.max(165, pose.cameraPos.z + 20);
+    glideTargetPos.copy(pose.targetPos);
+    glideCameraPos.copy(pose.cameraPos);
+    curveGlide = null;
+    if (immediate) {
+      controls.target.copy(glideTargetPos);
+      camera.position.copy(glideCameraPos);
+      controls.update();
+      glideActive = false;
+    } else {
+      glideActive = true;
+    }
+  }
+
   // Switch between the 3 sky lenses: "meaning" | "history" | "geography"
   function setLens(lensName) {
     if (!["meaning", "history", "geography"].includes(lensName)) return;
@@ -1092,8 +1313,8 @@ export function createGalaxyScene({
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 12, 60);
     } else if (lensName === "geography") {
-      glideTargetPos.set(-1.5, -5, 0);
-      glideCameraPos.set(-1.5, -11, Math.min(180, Math.max(54, 71 / camera.aspect))); // fov 50: fit the ~66-unit-wide map + unlocated cluster
+      applyGeographyCameraPose({ immediate: reducedMotion });
+      return;
     } else {
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 6, 62);
@@ -1965,8 +2186,8 @@ export function createGalaxyScene({
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 12, 60);
     } else if (currentLens === "geography") {
-      glideTargetPos.set(-1.5, -5, 0);
-      glideCameraPos.set(-1.5, -11, Math.min(180, Math.max(54, 71 / camera.aspect))); // fov 50: fit the ~66-unit-wide map + unlocated cluster
+      applyGeographyCameraPose({ immediate: reducedMotion });
+      return;
     } else {
       glideTargetPos.set(0, 0, 0);
       glideCameraPos.set(0, 6, 62);
@@ -2662,22 +2883,57 @@ export function createGalaxyScene({
     // Project lens guide labels when in "history" or "geography" lens
     const lensGuideLabels = [];
     if (currentLens === "history" || currentLens === "geography") {
+      if (!cachedSafeArea && typeof document !== "undefined") {
+        refreshUiMetrics();
+      }
       const anchors =
         currentLens === "history" ? HISTORY_GUIDE_ANCHORS : GEO_GUIDE_ANCHORS;
+      const placedRects = [];
       for (const anc of anchors) {
         projVec.copy(anc.pos).project(camera);
-        if (projVec.z >= -1 && projVec.z <= 1) {
-          const x = (projVec.x + 1) * 0.5 * width;
-          const y = (-projVec.y + 1) * 0.5 * height;
-          if (x > 50 && x < width - rightMargin && y > 100 && y < height - 170) {
-            if (x < 540 && y < 210) continue;
-            lensGuideLabels.push({
-              label: anc.label,
-              x,
-              y,
-            });
+        if (projVec.z < -1 || projVec.z > 1) continue;
+        const x = (projVec.x + 1) * 0.5 * width;
+        const y = (-projVec.y + 1) * 0.5 * height;
+        const rx = Math.round(x);
+        const ry = Math.round(y);
+        const bw = anc.boxW || 80;
+        const bh = anc.boxH || 26;
+        const rect = {
+          left: rx - bw * 0.5,
+          right: rx + bw * 0.5,
+          top: ry - bh * 0.5,
+          bottom: ry + bh * 0.5,
+        };
+        if (
+          rect.left < 2 ||
+          rect.right > width - 2 ||
+          rect.top < 2 ||
+          rect.bottom > height - 2
+        ) {
+          continue;
+        }
+        let hitsUi = false;
+        for (const ui of cachedExclusionRects) {
+          if (rectsIntersect(rect, ui, 2)) {
+            hitsUi = true;
+            break;
           }
         }
+        if (hitsUi) continue;
+        let hitsLabel = false;
+        for (const prev of placedRects) {
+          if (rectsIntersect(rect, prev, 1)) {
+            hitsLabel = true;
+            break;
+          }
+        }
+        if (hitsLabel) continue;
+        placedRects.push(rect);
+        lensGuideLabels.push({
+          label: anc.label,
+          x,
+          y,
+        });
       }
     }
 
@@ -2870,6 +3126,42 @@ export function createGalaxyScene({
 
   renderer.setAnimationLoop(animate);
 
+  if (typeof document !== "undefined") {
+    refreshUiMetrics();
+    document.fonts?.ready?.then(() => refreshUiMetrics());
+    if (typeof ResizeObserver !== "undefined") {
+      const uiResizeObserver = new ResizeObserver((entries) => {
+        const prevTop = cachedSafeArea?.top;
+        const prevBottom = cachedSafeArea?.bottom;
+        refreshUiMetrics();
+        if (
+          currentLens === "geography" &&
+          !inRoadMode &&
+          !inSummaryMode &&
+          (cachedSafeArea?.top !== prevTop || cachedSafeArea?.bottom !== prevBottom) &&
+          entries.some((e) => e.target.id === "sky-top-bar" || e.target.id === "timeslider-root")
+        ) {
+          applyGeographyCameraPose({ immediate: reducedMotion || !glideActive });
+        }
+      });
+      for (const id of UI_EXCLUSION_IDS) {
+        const el = document.getElementById(id);
+        if (el) uiResizeObserver.observe(el);
+      }
+    }
+    if (typeof MutationObserver !== "undefined") {
+      const uiAttrObserver = new MutationObserver(() => {
+        refreshUiMetrics();
+      });
+      for (const id of UI_EXCLUSION_IDS) {
+        const el = document.getElementById(id);
+        if (el) {
+          uiAttrObserver.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+        }
+      }
+    }
+  }
+
   window.addEventListener("resize", () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -2884,6 +3176,14 @@ export function createGalaxyScene({
     material.uniforms.uPixelRatio.value = pr;
     if (roadTrailMaterial) {
       roadTrailMaterial.uniforms.uPixelRatio.value = pr;
+    }
+    refreshUiMetrics();
+    applyUnlocatedLayout(
+      w < h,
+      currentLens === "geography" && !inRoadMode && !inSummaryMode
+    );
+    if (currentLens === "geography" && !inRoadMode && !inSummaryMode) {
+      applyGeographyCameraPose({ immediate: true });
     }
   });
 
@@ -2944,6 +3244,51 @@ export function createGalaxyScene({
     },
     getRendererInfo() {
       return renderer.info;
+    },
+    getGeographyOutlineScreenBbox() {
+      const w = typeof window !== "undefined" ? window.innerWidth : 1280;
+      const h = typeof window !== "undefined" ? window.innerHeight : 720;
+      const v = new THREE.Vector3();
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const [lat, lon] of FINLAND_BORDER_LATLON) {
+        const [gx, gy, gz] = latLonToGeoPoint(lat, lon, -0.2);
+        v.set(gx, gy, gz).project(camera);
+        const sx = (v.x + 1) * 0.5 * w;
+        const sy = (-v.y + 1) * 0.5 * h;
+        minX = Math.min(minX, sx);
+        maxX = Math.max(maxX, sx);
+        minY = Math.min(minY, sy);
+        maxY = Math.max(maxY, sy);
+      }
+      const layout = getUnlocatedLayout(isPortraitGeo);
+      let uMinX = Infinity;
+      let uMaxX = -Infinity;
+      let uMinY = Infinity;
+      let uMaxY = -Infinity;
+      for (const [ux, uy] of [
+        [layout.cx - layout.rCircle, layout.cy],
+        [layout.cx + layout.rCircle, layout.cy],
+        [layout.cx, layout.cy - layout.rCircle],
+        [layout.cx, layout.cy + layout.rCircle],
+      ]) {
+        v.set(ux, uy, 0).project(camera);
+        const sx = (v.x + 1) * 0.5 * w;
+        const sy = (-v.y + 1) * 0.5 * h;
+        uMinX = Math.min(uMinX, sx);
+        uMaxX = Math.max(uMaxX, sx);
+        uMinY = Math.min(uMinY, sy);
+        uMaxY = Math.max(uMaxY, sy);
+      }
+      return {
+        outlineBbox: { minX, maxX, minY, maxY, width: maxX - minX, height: maxY - minY },
+        unlocatedBbox: { minX: uMinX, maxX: uMaxX, minY: uMinY, maxY: uMaxY },
+        safeArea: cachedSafeArea,
+        isPortraitGeo,
+        cameraPos: camera.position.toArray(),
+      };
     },
   };
 }

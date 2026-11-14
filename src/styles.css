@@ -1636,8 +1636,9 @@ a:focus-visible,
   position: absolute;
   top: 0;
   left: 0;
+  translate: -50% -50%;
   pointer-events: none;
-  padding: 3px 8px;
+  padding: 2px 6px;
   background-color: var(--kaamos);
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -3203,6 +3204,13 @@ a:focus-visible,
   .lens-switcher {
     flex-wrap: wrap;
     max-width: 100%;
+  }
+  .projected-lens-guide {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    white-space: normal;
+    max-width: 125px;
+    text-align: center;
   }
 }
 
