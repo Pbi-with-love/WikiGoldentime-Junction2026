@@ -11,3 +11,4 @@ artifacts/
 .claude/skills/
 .agents/skills/
 skills-lock.json
+.playwright-cli/

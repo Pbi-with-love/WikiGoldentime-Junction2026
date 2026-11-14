@@ -256,6 +256,12 @@ def test_diff_by_rev_id_and_timestamps():
     assert client.get("/api/diff/1256", params={"from": "412098", "to": str(r_now)}).status_code == 404
     assert client.get("/api/diff/1256", params={"from": "not-valid", "to": "2026"}).status_code == 422
 
+    # Short (early) rev_ids are revisions, not years: Jatkosota 471 -> 472.
+    short = client.get("/api/diff/440", params={"from": "471", "to": "472"})
+    assert short.status_code == 200 and len(short.json()["parts"]) > 0
+    # Short digits that are no rev of the page and no plausible year -> 404, never "now".
+    assert client.get("/api/diff/440", params={"from": "6110", "to": "472"}).status_code == 404
+
 
 def test_static_root_serves_index_html():
     resp = client.get("/")

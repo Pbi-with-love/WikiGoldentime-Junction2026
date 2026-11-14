@@ -35,7 +35,7 @@ elif "SVT_DB_PORT" in os.environ:
 
 VALID_LANGS = ("fi", "sv", "en")
 DIST_DIR = REPO_ROOT / "dist"
-_REV_ID_RE = re.compile(r"^\d{5,}$")
+_REV_ID_RE = re.compile(r"^\d+$")
 _YEAR_RE = re.compile(r"^\d{4}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
@@ -128,12 +128,6 @@ SELECT title, rev_id, user, comment, text, row_start, row_end
 FROM article FOR SYSTEM_TIME ALL
 WHERE page_id = ? AND rev_id = ?
 LIMIT 1
-"""
-
-REVS_BY_IDS_SQL = """
-SELECT title, rev_id, user, comment, text, row_start, row_end
-FROM article FOR SYSTEM_TIME ALL
-WHERE page_id = ? AND rev_id IN (?, ?)
 """
 
 # shortcut: stars cached for process lifetime, restart api after data reloads
@@ -357,7 +351,12 @@ def _diff_blocks(
 def _resolve_diff_side(cur: mariadb.Cursor, page_id: int, param: str | None) -> dict[str, Any] | None:
     if param is not None and _REV_ID_RE.fullmatch(param.strip()):
         found = history.rows(cur, REV_BY_ID_SQL, (page_id, int(param.strip())))
-        return found[0] if found else None
+        if found:
+            return found[0]
+        # Old revisions have short ids (e.g. 6110); digits that are no rev of this page are a year
+        # only when they look like a Wikipedia year, otherwise 404.
+        if not (_YEAR_RE.fullmatch(param.strip()) and 2001 <= int(param) <= 2100):
+            return None
     moment = _normalize_at(param)
     return history.as_of(cur, page_id, moment)
 
@@ -584,23 +583,12 @@ def get_diff(
     from_param: str = Query(..., alias="from"),
     to_param: str | None = Query(default=None, alias="to"),
 ):
-    from_is_rev = bool(_REV_ID_RE.fullmatch(from_param.strip()))
-    to_is_rev = bool(to_param is not None and _REV_ID_RE.fullmatch(to_param.strip()))
-
     con = _open_svt()
     try:
         cur = con.cursor()
         try:
-            if from_is_rev and to_is_rev:
-                r1 = int(from_param.strip())
-                r2 = int(to_param.strip())  # type: ignore[union-attr]
-                found = history.rows(cur, REVS_BY_IDS_SQL, (page_id, r1, r2))
-                by_rev = {int(r["rev_id"]): r for r in found}
-                from_row = by_rev.get(r1)
-                to_row = by_rev.get(r2)
-            else:
-                from_row = _resolve_diff_side(cur, page_id, from_param)
-                to_row = _resolve_diff_side(cur, page_id, to_param)
+            from_row = _resolve_diff_side(cur, page_id, from_param)
+            to_row = _resolve_diff_side(cur, page_id, to_param)
         finally:
             cur.close()
     finally:
