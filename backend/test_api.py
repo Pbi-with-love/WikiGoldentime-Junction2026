@@ -22,6 +22,31 @@ MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 client = TestClient(app)
 
 
+def _svt_scalar(sql: str) -> int:
+    con = backend_main._open_svt()
+    try:
+        cur = con.cursor()
+        cur.execute(sql)
+        return int(cur.fetchone()[0])
+    finally:
+        con.close()
+
+
+def _fi_pages_with_history() -> int:
+    """fi articles in wikirag that also have a wikihistory row (the two DBs need separate users)."""
+    ids = []
+    for opener, sql in ((backend_main._open_svt, "SELECT page_id FROM history_stats"),
+                        (backend_main._open_rag, "SELECT page_id FROM article WHERE lang = 'fi'")):
+        con = opener()
+        try:
+            cur = con.cursor()
+            cur.execute(sql)
+            ids.append({r[0] for r in cur.fetchall()})
+        finally:
+            con.close()
+    return len(ids[0] & ids[1])
+
+
 def _assert_contiguous_months(months: list[dict]) -> None:
     assert len(months) > 0
     prev_idx = None
@@ -81,7 +106,7 @@ def test_stars_shape_counts_and_gzip():
             talvisota = row
 
     assert counts == {"fi": 19285, "sv": 4921, "en": 5254}
-    assert hist_count == 50
+    assert hist_count == _fi_pages_with_history()
     assert talvisota is not None
     assert talvisota["title"] == "Talvisota"
     assert talvisota["length"] == 78984
@@ -313,10 +338,9 @@ def test_global_and_article_timelines_with_gap_fill_and_404():
     g_data = g_resp.json()
     assert set(g_data.keys()) == {"months"}
     _assert_contiguous_months(g_data["months"])
-    assert sum(m["edits"] for m in g_data["months"]) == 31848
-    # Global month_stats is sparse (279 rows), while contiguous 2003-03..2026-09 has 283 months.
+    assert sum(m["edits"] for m in g_data["months"]) == _svt_scalar("SELECT SUM(versions) FROM history_stats")
+    # Full dataset M covers every month 2003-03..2026-09, so gap-fill may add no zero rows.
     assert len(g_data["months"]) >= 283
-    assert any(m["edits"] == 0 for m in g_data["months"])
 
     a_resp = client.get("/api/timeline/1256")
     assert a_resp.status_code == 200
