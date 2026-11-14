@@ -19,6 +19,17 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Server data: dataset S + vectors on 3307; wikihistory (50 articles / 31,848 versions) on 3308 AND
   merged into 3307 (spec 002). Done: UMAP coords, images, chunks table, summaries, ask, LLM key.
 
+## User decisions 14:05 UTC
+- 011: compare snapshots by sha1; lang='fi' for every row (dataset M is Finnish only).
+- Parallel workers: re-register the project in Orca as a git repo, then `--worktree new-child` for every
+  parallel worker (do it when no worker is running). Worker rule added to HYDROGEN.md/GEMINI.md: never edit docs/memory/*.
+- Dataset M full load: APPROVED, tonight, last, after current workers finish: into 3307 `wikihistory` (organizers'
+  load.py with DB_PORT=3307 env, their repo untouched), `nice -n 19`, tmux. Then rerun history_stats; expect
+  ~862,000 versions / ~19,750 page_ids; switch backend env to 3307 and stop the 3308 container
+  (OPEN: organizers' `tm` :8001 reads 3308 by default -> confirm with user before stopping 3308).
+- Priority after 012 + 011: /api/summary real sections/section history/ghosts + pre-warm demo articles
+  (009 already delivered these on the 50 history articles; after the M load, rerun pre-warm), then 013.
+
 ## Update 13:45 UTC: checkpoint steps 1–3 done. Embed complete + eval (see 008); snapshot_chunk_vector = 17,791 rows (50 pages, 926 snapshots, 222 s); GPU released (ollama stopped+disabled on 65.108.33.70, gputun/embed_chain/snapshots killed) -> USER: delete the Verda instance. dl finished (16/16 files) -> dataset M load waits for the user's OK. 012 rebuilding answer_cache (tmux answers).
 
 ## CHECKPOINT 2026-11-14 ~13:00 UTC (session handoff)
