@@ -37,8 +37,8 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - 006-api-core | done | FastAPI on VPS 127.0.0.1:8002 (tmux api); orchestrator rerun: REAL=stars,search,article,timeline,asof,diff contract 10 pass/0 fail/1 skip (error-mode), mock 11/11; curl via tunnel: stars 0.32 s gz 1.7 MB, search 0.46 s, article 0.16 s, timeline 0.18 s, asof 0.18 s, diff 0.17 s; 6 MOCK flags now false; vite.config.js proxies /api to :8002; contract edits: top-2 gap <0.02, asof date 2026-10-01 |
 - 007-fetch-images | done | article_image 15,355 rows (en 3,425 / fi 8,723 / sv 3,207 = 52.1% of 29,460; orchestrator recount), Commons-only, utm stripped, thumb.wikimedia.org + upload.wikimedia.org; 28 min; resume = 0 requests; /api/article/fi/1256 now returns real thumb_url. TODO: expose license/artist in API + UI credit; User-Agent contact is still a placeholder |
 - 008-chunks | partial | chunk 83,797 rows (fi 51,541 / sv 11,810 / en 20,446; 19,469 reused article vectors); chunk_vector 21,497 (small batch 2,028 embedded on Mac, digest 790764642607); still to embed: fi 37,323 / sv 8,166 / en 16,811 (~1.8 chunks/s on M2 => fi ~5.8 h, all ~9.6 h), user runs scripts/EMBED_ON_MAC.md. Partial eval hit@5 76%->95%, hit@10 86%->97% is BIASED (only the answer pages got chunk vectors); the headline number needs the full run |
-- 009-api-summary | in progress (Hydrogen) |
-- 010-api-ask | spec ready (hero demo, Way A) |
+- 009-api-summary | done | /api/summary real (MOCK.summary=false); claude-haiku-5-5, facts carry verbatim source sentence (92/92 grounded on fi 1256/1150/440); summary_cache pre-warmed; cache hit ~3-7 ms, miss = extractive + background LLM; Talvisota: 14 sections, 5 ghost sections; contract REAL=summary 11/11, mock 11/11 (orchestrator rerun); Playwright `artifacts/screenshots/009-api-summary/` |
+- 010-api-ask | in progress (Hydrogen) (hero demo, Way A) |
 - 011-wayb-spike | spec ready (gate: 010 done; half a day; findings -> docs/memory/research/wayb-spike.md) |
 
 ## Backlog (proposed specs, in order)

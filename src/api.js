@@ -5,7 +5,7 @@
 
 export const MOCK = {
   stars: false, search: false, article: false, timeline: false, asof: false, diff: false,
-  summary: true, ask: true, threads: true, road: true, "topic-road": true,
+  summary: false, ask: true, threads: true, road: true, "topic-road": true,
 };
 
 const API_BASE = (globalThis.process?.env?.API_BASE ?? "").replace(/\/+$/, "");

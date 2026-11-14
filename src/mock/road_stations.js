@@ -1294,33 +1294,49 @@ export function buildSummaryForStar(star, siblings = [], branchTargets = []) {
     { label: "Length", value: `${art.words.toLocaleString("en-US")} words (${art.reading_minutes} min)` },
   ].slice(0, 3);
 
-  const facts = fixtureMeta ? fixtureMeta.facts.slice(0, 3) : defaultFacts;
+  const mockLeadSource = extractFirstSentence(tldr, star.title);
+  const facts = (fixtureMeta ? fixtureMeta.facts : defaultFacts).slice(0, 3).map((f) => ({
+    label: f.label,
+    value: f.value,
+    source: f.source || mockLeadSource,
+  }));
 
   const sections = isLong
-    ? road.stations.map((st) => ({
-        no: st.no,
-        heading: st.heading,
-        words: st.words,
-        reading_minutes: st.reading_minutes,
-        one_line: st.one_line || extractFirstSentence(st.summary, st.heading),
-        summary: st.summary,
-        text: st.text,
-        history: st.history ? { ...st.history, war_years: [...(st.history.war_years || [])] } : null,
-      }))
+    ? road.stations.map((st) => {
+        const secSource = extractFirstSentence(st.text, st.heading);
+        return {
+          no: st.no,
+          heading: st.heading,
+          words: st.words,
+          reading_minutes: st.reading_minutes,
+          one_line: st.one_line || extractFirstSentence(st.summary, st.heading),
+          summary: st.summary,
+          facts: (st.facts || []).slice(0, 3).map((f) => ({
+            label: f.label,
+            value: f.value,
+            source: f.source || secSource,
+          })),
+          text: st.text,
+          history: st.history ? { ...st.history, war_years: [...(st.history.war_years || [])] } : null,
+        };
+      })
     : [];
 
   const ghost_sections = isLong
-    ? (road.ghost_stations || []).map((g) => ({
+    ? (road.ghost_stations || []).map((g, idx) => ({
         after_no: g.after_no,
         heading: g.heading,
         from_year: g.from_year,
         removed_year: g.removed_year,
         text: g.text,
+        oldid: g.oldid || 9000000 + Number(star.page_id || 0) * 10 + idx,
       }))
     : [];
 
   return {
     article: art,
+    mode: "mock",
+    rev_id: star.rev_id || 20000000 + Number(star.page_id || 0),
     tldr,
     facts,
     sections,

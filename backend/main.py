@@ -14,7 +14,7 @@ import sys
 import threading
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
 import mariadb
 from starlette.middleware.gzip import GZipMiddleware
@@ -26,7 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 # Ensure SVT defaults to the merged 3307 server unless explicitly overridden.
 os.environ.setdefault("DB_PORT", "3307")
 
-from backend import history, rag_common, svt_common  # noqa: E402
+from backend import history, rag_common, summary, svt_common  # noqa: E402
 
 if svt_common.DB["port"] == 3308 and os.environ.get("DB_PORT") != "3308":
     svt_common.DB["port"] = int(os.environ.get("SVT_DB_PORT", 3307))
@@ -612,6 +612,11 @@ def get_diff(
     old_blocks = history.clean(from_row["text"])
     new_blocks = history.clean(to_row["text"])
     return {"parts": _diff_blocks(old_blocks, new_blocks)}
+
+
+@app.get("/api/summary/{lang}/{page_id}")
+def get_summary(lang: str, page_id: int, background_tasks: BackgroundTasks):
+    return summary.get_summary_response(lang, page_id, background_tasks)
 
 
 if DIST_DIR.is_dir():

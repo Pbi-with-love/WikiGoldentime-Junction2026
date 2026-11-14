@@ -398,44 +398,142 @@ test("GET /api/topic-road supports Option A Topic Road fixtures (Talvisota, Suom
 });
 
 test("GET /api/summary/{lang}/{page_id} returns 3D Summary Trail fixtures, Jatkosota, and short-article overview-only responses", async () => {
-  // 1. Talvisota (1256): 13 sections + 1 ghost_section
-  const talviSummary = await getSummary("fi", 1256);
-  assert.equal(talviSummary.article.title, "Talvisota");
-  assert.equal(talviSummary.article.words, 8395);
-  assert.equal(talviSummary.article.reading_minutes, 35);
-  if (MOCK.summary) assert.ok(talviSummary.tldr.includes("[mock]"));
-  assert.ok(Array.isArray(talviSummary.facts) && talviSummary.facts.length > 0 && talviSummary.facts.length <= 3);
-  assert.equal(talviSummary.sections.length, 13);
-  assert.equal(talviSummary.ghost_sections.length, 1);
-  for (const sec of talviSummary.sections) {
+  const normWs = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const assertFactShape = (f) => {
+    assert.equal(typeof f.label, "string");
+    assert.ok(f.label.length > 0);
+    assert.equal(typeof f.value, "string");
+    assert.ok(f.value.length > 0);
+    assert.equal(typeof f.source, "string");
+    assert.ok(f.source.length > 0);
+  };
+  const assertLongSummaryShape = (sum, expectedTitle) => {
+    assert.equal(sum.article.title, expectedTitle);
+    assert.ok(sum.article.words >= 1500);
+    assert.ok(sum.article.reading_minutes >= 1);
+    assert.equal(sum.article.has_history, true);
+    assert.equal(typeof sum.rev_id, "number");
+    assert.ok(typeof sum.tldr === "string" && sum.tldr.length > 0);
+    assert.ok(Array.isArray(sum.facts) && sum.facts.length <= 3);
+    for (const f of sum.facts) assertFactShape(f);
+
     if (MOCK.summary) {
-      assert.ok(sec.one_line.includes("[mock]"));
-      assert.ok(sec.summary.includes("[mock]"));
-      assert.ok(sec.text.includes("[mock]"));
+      assert.equal(sum.mode, "mock");
+      assert.ok(sum.tldr.includes("[mock]"));
+      assert.ok(sum.facts.length > 0);
+    } else {
+      assert.ok(["llm", "extractive"].includes(sum.mode));
+      assert.ok(!sum.tldr.includes("[mock]"));
     }
-    assert.ok(sec.history && typeof sec.history.changes === "number");
+
+    assert.ok(Array.isArray(sum.sections) && sum.sections.length >= 4);
+    sum.sections.forEach((sec, idx) => {
+      assert.equal(sec.no, idx + 1);
+      assert.ok(typeof sec.heading === "string" && sec.heading.length > 0);
+      assert.ok(typeof sec.words === "number" && sec.words >= 20);
+      assert.ok(typeof sec.reading_minutes === "number" && sec.reading_minutes >= 1);
+      assert.ok(typeof sec.one_line === "string" && sec.one_line.length > 0);
+      assert.ok(typeof sec.summary === "string" && sec.summary.length > 0);
+      assert.ok(Array.isArray(sec.facts) && sec.facts.length <= 3);
+      for (const f of sec.facts) {
+        assertFactShape(f);
+        if (!MOCK.summary) {
+          assert.ok(
+            normWs(sec.text).includes(normWs(f.source)),
+            `Section ${sec.heading} fact source not found in sec.text: ${f.source}`
+          );
+        }
+      }
+      assert.ok(typeof sec.text === "string" && sec.text.startsWith("## "));
+      if (MOCK.summary) {
+        assert.ok(sec.one_line.includes("[mock]"));
+        assert.ok(sec.summary.includes("[mock]"));
+        assert.ok(sec.text.includes("[mock]"));
+      } else {
+        assert.ok(!sec.one_line.includes("[mock]"));
+        assert.ok(!sec.summary.includes("[mock]"));
+        assert.ok(!sec.text.includes("[mock]"));
+      }
+      assert.ok(sec.history && typeof sec.history.added_year === "number");
+      assert.equal(typeof sec.history.changes, "number");
+      assert.ok(Array.isArray(sec.history.war_years));
+    });
+
+    assert.ok(Array.isArray(sum.ghost_sections));
+    for (const g of sum.ghost_sections) {
+      assert.equal(typeof g.after_no, "number");
+      assert.ok(typeof g.heading === "string" && g.heading.length > 0);
+      assert.equal(typeof g.from_year, "number");
+      assert.equal(typeof g.removed_year, "number");
+      assert.equal(typeof g.text, "string");
+      assert.equal(typeof g.oldid, "number");
+    }
+  };
+
+  // 1. Talvisota (1256)
+  const talviSummary = await getSummary("fi", 1256);
+  assertLongSummaryShape(talviSummary, "Talvisota");
+  if (MOCK.summary) {
+    assert.equal(talviSummary.article.words, 8395);
+    assert.equal(talviSummary.article.reading_minutes, 35);
+    assert.equal(talviSummary.sections.length, 13);
+    assert.equal(talviSummary.ghost_sections.length, 1);
   }
 
-  // 2. Suomen sisällissota (1150): 11 sections + 1 ghost_section
+  // 2. Suomen sisällissota (1150)
   const sisallisSummary = await getSummary("fi", 1150);
-  assert.equal(sisallisSummary.article.title, "Suomen sisällissota");
-  assert.equal(sisallisSummary.sections.length, 11);
-  assert.equal(sisallisSummary.ghost_sections.length, 1);
+  assertLongSummaryShape(sisallisSummary, "Suomen sisällissota");
+  if (MOCK.summary) {
+    assert.equal(sisallisSummary.sections.length, 11);
+    assert.equal(sisallisSummary.ghost_sections.length, 1);
+  }
 
-  // 3. Jatkosota (440): 10 real-structure sections + 1 ghost_section
+  // 3. Jatkosota (440)
   const jatkoSummary = await getSummary("fi", 440);
-  assert.equal(jatkoSummary.article.title, "Jatkosota");
-  assert.equal(jatkoSummary.sections.length, 10);
-  assert.equal(jatkoSummary.sections[2].heading, "Hyökkäysvaihe");
-  assert.equal(jatkoSummary.sections[3].heading, "Asemasotavaihe");
-  assert.equal(jatkoSummary.ghost_sections.length, 1);
-  if (MOCK.summary) assert.ok(jatkoSummary.tldr.includes("[mock]"));
+  assertLongSummaryShape(jatkoSummary, "Jatkosota");
+  if (MOCK.summary) {
+    assert.equal(jatkoSummary.sections.length, 10);
+    assert.equal(jatkoSummary.sections[2].heading, "Hyökkäysvaihe");
+    assert.equal(jatkoSummary.sections[3].heading, "Asemasotavaihe");
+    assert.equal(jatkoSummary.ghost_sections.length, 1);
+  }
+
+  // Real-mode top-level fact grounding check against the real article text from API_BASE
+  if (!MOCK.summary) {
+    const apiBase = (process.env.API_BASE || "").replace(/\/+$/, "");
+    for (const [sum, pid] of [
+      [talviSummary, 1256],
+      [sisallisSummary, 1150],
+      [jatkoSummary, 440],
+    ]) {
+      if (sum.facts.length > 0) {
+        const artRes = await fetch(`${apiBase}/api/article/fi/${pid}`);
+        assert.equal(artRes.status, 200);
+        const artJson = await artRes.json();
+        const normArt = normWs(artJson.text);
+        for (const f of sum.facts) {
+          assert.ok(
+            normArt.includes(normWs(f.source)),
+            `Top-level fact source for fi:${pid} not found in article text: ${f.source}`
+          );
+        }
+      }
+    }
+  }
 
   // 4. Short article (sv:426533 Moskvafreden, < 1,500 words / < 4 sections) -> Card 0 only (sections: [])
   const shortSummary = await getSummary("sv", 426533);
   assert.equal(shortSummary.article.title, "Moskvafreden");
-  if (MOCK.summary) assert.ok(shortSummary.tldr.includes("[mock]"));
+  assert.equal(typeof shortSummary.rev_id, "number");
+  if (MOCK.summary) {
+    assert.equal(shortSummary.mode, "mock");
+    assert.ok(shortSummary.tldr.includes("[mock]"));
+  } else {
+    assert.ok(["llm", "extractive"].includes(shortSummary.mode));
+    assert.ok(!shortSummary.tldr.includes("[mock]"));
+  }
   assert.ok(Array.isArray(shortSummary.facts) && shortSummary.facts.length <= 3);
+  for (const f of shortSummary.facts) assertFactShape(f);
   assert.deepEqual(shortSummary.sections, []);
   assert.deepEqual(shortSummary.ghost_sections, []);
 });
