@@ -26,7 +26,14 @@ One line per spec: id | state | evidence. Keep the "Now" section current.
 - Dataset M full load: APPROVED, tonight, last, after current workers finish: into 3307 `wikihistory` (organizers'
   load.py with DB_PORT=3307 env, their repo untouched), `nice -n 19`, tmux. Then rerun history_stats; expect
   ~862,000 versions / ~19,750 page_ids; switch backend env to 3307 and stop the 3308 container
-  (OPEN: organizers' `tm` :8001 reads 3308 by default -> confirm with user before stopping 3308).
+  DECIDED: keep 3308 running (organizers' `tm` :8001 reads it); only our backend moves to 3307.
+  load.py skips already-loaded articles (verified: loaded set line 35, per-file skip line 72).
+  During the load: `docker update --cpus 1.5 mariadb-vector-wikipedia-rag-mariadb-1`, back to `--cpus 0` after.
+  Start only after 011 and 012 finish; afterwards history_stats, report versions/page_ids, re-prewarm demo summaries.
+- Orca re-registration as git repo: after 011 and 012 finish (may need the user in the Orca UI).
+- /api/summary for history-less articles verified 14:15 UTC (fi 714914, sv 8184377, en 12424302, + fi 115530,
+  sv 18361, en 305738): all HTTP 200, history null, ghost_sections [], llm tldr + facts with source.
+  sections [] whenever words < 1500 or kept sections < 4 (spec 009 is_short rule, by design).
 - Priority after 012 + 011: /api/summary real sections/section history/ghosts + pre-warm demo articles
   (009 already delivered these on the 50 history articles; after the M load, rerun pre-warm), then 013.
 
