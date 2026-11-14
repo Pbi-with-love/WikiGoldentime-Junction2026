@@ -893,6 +893,12 @@ async function init() {
         yearInt !== lastPanelYear
       ) {
         lastPanelYear = yearInt;
+        // Spec 033: before the article's first revision /api/asof has no snapshot (404); close the panel instead.
+        const bornYear = activeStar.created_year ?? activeStar.first_edit_year;
+        if (bornYear && yearInt < bornYear) {
+          ui.closeArticlePanel();
+          return;
+        }
         const currentArticle = ui.getCurrentArticle();
         if (currentArticle && currentArticle.has_history) {
           await openStarArticle(activeStar.lang, activeStar.page_id, {
