@@ -23,6 +23,11 @@ Wikipedia started 2001, fi 2002) instead of 2003.
       Same User-Agent constant as scripts/fetch_images.py, maxlag=5, polite pace (<= 5 req/s), resumable (skip checked),
       one process in tmux with nice -n 19 on the VPS. Report requests, runtime, coverage, year histogram per language,
       and any page whose API creation year is later than its wikirag date_modified (sanity).
+**Amendment 023-A (orchestrator, after 022 merged as 5f3b204):** in the Geography lens the south of Finland (Turku,
+Helsinki, Tampere band) is drawn under the bottom timeline bar/histogram (see artifacts/screenshots/022/geography-lens.png).
+Part B also fixes this: frame the geography camera/positions so the whole map sits above the slider at 1280x720 and
+at narrow widths (Playwright screenshots of the Geography lens at both sizes).
+
 ## Part B — API + UI (ONLY after spec 022 is merged: same /api/stars route and scene.js)
 - [ ] `/api/stars` adds `created_year` (int|null) for every star from article_created (LEFT JOIN; keep `first_edit_year`
       unchanged for history semantics). /api/stars stays < 1 s.
