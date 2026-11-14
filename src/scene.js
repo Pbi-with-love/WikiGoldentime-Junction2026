@@ -401,7 +401,7 @@ export const SKY_CLUSTER_ROADS = [
     label: "Suomen suuriruhtinaskunta",
     sublabel: t("scene.talvitieSublabel"),
     pos: [-22.0, -3.2, 16.0],
-    query: { category: "Autonomian aika", mode: "topic" },
+    query: { category: "Suomen suuriruhtinaskunta", mode: "topic" },
   },
 ];
 
