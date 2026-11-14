@@ -2656,6 +2656,10 @@ a:focus-visible,
     bottom: 12px;
   }
 
+  .road-cards-stage {
+    top: 156px;
+  }
+
   .kaamos-viewport:has(#article-panel:not([hidden])) .road-cards-stage {
     right: 0;
   }
@@ -3059,6 +3063,10 @@ a:focus-visible,
     padding: 16px 16px;
   }
 
+  .summary-trail-card.is-focused {
+    max-height: calc(100vh - 210px);
+  }
+
   .summary-bottom-bar {
     bottom: 12px;
   }
@@ -3081,7 +3089,7 @@ a:focus-visible,
   position: absolute;
   top: 22px;
   right: 28px;
-  z-index: 25;
+  z-index: 27;
   display: inline-flex;
   align-items: center;
   background-color: var(--panel);
@@ -3124,14 +3132,28 @@ a:focus-visible,
   right: 490px;
 }
 
+.road-top-row,
+.summary-top-row {
+  padding-right: 212px;
+}
+
+.kaamos-viewport:has(#article-panel:not([hidden])) .road-top-row,
+.kaamos-viewport:has(#article-panel:not([hidden])) .summary-top-row {
+  padding-right: 676px;
+}
+
 @media (max-width: 1280px) {
   .kaamos-viewport:has(#article-panel:not([hidden])) .lang-switcher {
     right: 444px;
   }
+  .kaamos-viewport:has(#article-panel:not([hidden])) .road-top-row,
+  .kaamos-viewport:has(#article-panel:not([hidden])) .summary-top-row {
+    padding-right: 626px;
+  }
 }
 
 @media (max-width: 1180px) and (min-width: 901px) {
-  .kaamos-viewport:has(#article-panel:not([hidden])) .lang-switcher {
+  .kaamos-viewport:has(#sky-top-bar:not([hidden])):has(#article-panel:not([hidden])) .lang-switcher {
     display: none;
   }
 }
@@ -3159,8 +3181,20 @@ a:focus-visible,
   .top-bar-row .status-pill {
     order: 4;
   }
+  .road-top-bar,
+  .summary-top-bar {
+    left: 16px;
+    right: 16px;
+  }
+  .road-top-row,
+  .summary-top-row,
+  .kaamos-viewport:has(#article-panel:not([hidden])) .road-top-row,
+  .kaamos-viewport:has(#article-panel:not([hidden])) .summary-top-row {
+    padding-right: 0;
+  }
   .summary-heading-group,
   .road-topic-heading {
+    flex-basis: 100%;
     flex-wrap: wrap;
   }
 }

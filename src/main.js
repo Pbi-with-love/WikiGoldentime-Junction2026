@@ -16,7 +16,7 @@ import {
 import { createGalaxyScene } from "./scene.js";
 import { createTimeSlider } from "./timeslider.js";
 import { createUI } from "./ui.js";
-import { lang as uiLang, applyStatic, t } from "./i18n.js";
+import { lang as uiLang, applyStatic, t, saveViewState, consumeViewState } from "./i18n.js";
 
 const EDIT_WAR_DISPUTE_YEARS = {
   1256: [2007, 2008, 2013, 2014, 2017, 2022],
@@ -96,53 +96,7 @@ async function init() {
     },
 
     async onAskSubmit(query) {
-      stopIntroSweep({ jumpToEnd: true });
-      const endLoading = beginLoading();
-      try {
-        const askRes = await ask(query, uiLang);
-        const topKey = `${askRes.top.lang}:${askRes.top.page_id}`;
-        const topStar = starByKey.get(topKey) || null;
-        const threadsRes = await getThreads(askRes.top.lang, askRes.top.page_id);
-        const threads = threadsRes?.threads || [];
-
-        endLoading();
-
-        activeAskState = {
-          query,
-          askRes,
-          threads,
-          activeMilestoneIdx: -1,
-          milestoneDiff: null,
-          todayRevId: null,
-        };
-
-        if (topStar) {
-          activeStar = topStar;
-          if (constellationPath.length < 2) {
-            constellationPath = [topStar];
-            savedConstellationHash = "";
-            ui.renderConstellationBar(constellationPath, savedConstellationHash);
-          }
-        }
-
-        const sourceStars = (askRes.sources || [])
-          .map((s) => starByKey.get(`${s.lang}:${s.page_id}`))
-          .filter(Boolean);
-        sceneCtrl?.setSearchResults(sourceStars, { glide: false });
-        if (topStar) {
-          // 023: a not-yet-born top article moves the slider to its creation year.
-          const bornYear = topStar.created_year ?? topStar.first_edit_year;
-          if (bornYear && bornYear > Math.round(currentYear)) sliderCtrl?.setYear(bornYear);
-          sceneCtrl?.selectStar(topStar, { glide: true });
-          sceneCtrl?.setThreads(topStar, threads, currentYear);
-        }
-
-        ui.renderAskResult(activeAskState);
-      } catch (err) {
-        ui.showError(t("error.network"));
-      } finally {
-        endLoading();
-      }
+      await runAskQuery(query);
     },
 
     onClearSearch() {
@@ -200,39 +154,7 @@ async function init() {
     },
 
     async onSelectMilestone(askRes, ms, idx) {
-      stopIntroSweep({ jumpToEnd: false });
-      const endLoading = beginLoading();
-      try {
-        sliderCtrl?.setYear(ms.to_year);
-        const topArticle = await getArticle(askRes.top.lang, askRes.top.page_id);
-        const milestoneDiff = await getDiff(
-          askRes.top.page_id,
-          ms.rev_id,
-          topArticle.rev_id
-        );
-        endLoading();
-
-        if (activeAskState) {
-          activeAskState = {
-            ...activeAskState,
-            activeMilestoneIdx: idx,
-            milestoneDiff,
-            todayRevId: topArticle.rev_id,
-          };
-          ui.renderAskResult(activeAskState);
-        }
-
-        await openStarArticle(askRes.top.lang, askRes.top.page_id, {
-          glide: false,
-          openTab: "history",
-          asofYear: ms.to_year,
-          keepConstellation: true,
-        });
-      } catch (err) {
-        ui.showError(t("error.network"));
-      } finally {
-        endLoading();
-      }
+      await selectMilestone(askRes, ms, idx);
     },
 
     async onSelectAsOfYear(pageId, yearInt) {
@@ -317,6 +239,10 @@ async function init() {
       });
     },
 
+    onBeforeLangSwitch() {
+      saveViewState(captureViewState());
+    },
+
     async onRoadBranchClick(branch) {
       if (!branch) return;
       const bLang = branch.lang || "fi";
@@ -381,11 +307,165 @@ async function init() {
     ui.setLoading(false);
   }
 
+  async function runAskQuery(query) {
+    stopIntroSweep({ jumpToEnd: true });
+    const endLoading = beginLoading();
+    try {
+      const askRes = await ask(query, uiLang);
+      const topKey = `${askRes.top.lang}:${askRes.top.page_id}`;
+      const topStar = starByKey.get(topKey) || null;
+      const threadsRes = await getThreads(askRes.top.lang, askRes.top.page_id);
+      const threads = threadsRes?.threads || [];
+
+      endLoading();
+
+      activeAskState = {
+        query,
+        askRes,
+        threads,
+        activeMilestoneIdx: -1,
+        milestoneDiff: null,
+        todayRevId: null,
+      };
+
+      if (topStar) {
+        activeStar = topStar;
+        if (constellationPath.length < 2) {
+          constellationPath = [topStar];
+          savedConstellationHash = "";
+          ui.renderConstellationBar(constellationPath, savedConstellationHash);
+        }
+      }
+
+      const sourceStars = (askRes.sources || [])
+        .map((s) => starByKey.get(`${s.lang}:${s.page_id}`))
+        .filter(Boolean);
+      sceneCtrl?.setSearchResults(sourceStars, { glide: false });
+      if (topStar) {
+        // 023: a not-yet-born top article moves the slider to its creation year.
+        const bornYear = topStar.created_year ?? topStar.first_edit_year;
+        if (bornYear && bornYear > Math.round(currentYear)) sliderCtrl?.setYear(bornYear);
+        sceneCtrl?.selectStar(topStar, { glide: true });
+        sceneCtrl?.setThreads(topStar, threads, currentYear);
+      }
+
+      ui.renderAskResult(activeAskState);
+      return activeAskState;
+    } catch (err) {
+      ui.showError(t("error.network"));
+      return null;
+    } finally {
+      endLoading();
+    }
+  }
+
+  async function selectMilestone(askRes, ms, idx) {
+    stopIntroSweep({ jumpToEnd: false });
+    const endLoading = beginLoading();
+    try {
+      sliderCtrl?.setYear(ms.to_year);
+      const topArticle = await getArticle(askRes.top.lang, askRes.top.page_id);
+      const milestoneDiff = await getDiff(askRes.top.page_id, ms.rev_id, topArticle.rev_id);
+      endLoading();
+
+      if (activeAskState) {
+        activeAskState = {
+          ...activeAskState,
+          activeMilestoneIdx: idx,
+          milestoneDiff,
+          todayRevId: topArticle.rev_id,
+        };
+        ui.renderAskResult(activeAskState);
+      }
+
+      await openStarArticle(askRes.top.lang, askRes.top.page_id, {
+        glide: false,
+        openTab: "history",
+        asofYear: ms.to_year,
+        keepConstellation: true,
+      });
+    } catch (err) {
+      ui.showError(t("error.network"));
+    } finally {
+      endLoading();
+    }
+  }
+
+  function captureViewState() {
+    const lens = sceneCtrl?.getCurrentLens?.() || "meaning";
+    const year = Math.round(sliderCtrl?.getCurrentYear?.() ?? currentYear ?? 2026);
+    const currentPanelArt = ui.getCurrentArticle();
+    const panelOpen = Boolean(ui.isPanelOpen() && currentPanelArt);
+    const panelArticle = panelOpen
+      ? { lang: currentPanelArt.lang || "fi", page_id: currentPanelArt.page_id }
+      : null;
+    const panelTab = ui.getActivePanelTab?.() || "today";
+
+    if (ui.isSummaryTrailOpen()) {
+      const sumState = ui.getSummaryViewState();
+      return {
+        view: "summary",
+        lens,
+        year,
+        article: sumState ? { lang: sumState.lang, page_id: sumState.page_id } : null,
+        cardIndex: sumState?.focusIdx ?? 0,
+        readMoreOpen: Boolean(sumState?.readMoreOpen),
+        panelOpen,
+        panelArticle,
+        panelTab,
+      };
+    }
+
+    if (ui.isRoadOpen()) {
+      const roadState = ui.getRoadViewState();
+      return {
+        view: "road",
+        lens,
+        year,
+        article:
+          roadState?.page_id != null
+            ? { lang: roadState.lang || "fi", page_id: roadState.page_id }
+            : null,
+        category: roadState?.category || null,
+        stationIndex: roadState?.stationIndex ?? 0,
+        panelOpen,
+        panelArticle,
+        panelTab,
+      };
+    }
+
+    if (ui.isAskOpen() && activeAskState?.query) {
+      return {
+        view: "ask",
+        lens,
+        year,
+        askQuery: activeAskState.query,
+        askMilestoneIdx: activeAskState.activeMilestoneIdx ?? -1,
+        panelOpen,
+        panelArticle,
+        panelTab,
+      };
+    }
+
+    if (panelOpen && panelArticle) {
+      return {
+        view: "panel",
+        lens,
+        year,
+        article: panelArticle,
+        panelTab,
+      };
+    }
+
+    return { view: "sky", lens, year };
+  }
+
   async function enterTalvitieRoad(arg1 = {}, arg2 = null) {
     let lang = "fi";
     let page_id = null;
     let category = null;
     let mode = null;
+    let stationIndex = 0;
 
     if (typeof arg1 === "string") {
       lang = arg1 || "fi";
@@ -396,6 +476,9 @@ async function init() {
       lang = arg1.lang || "fi";
       category = arg1.category || null;
       mode = arg1.mode || null;
+      if (Number.isFinite(Number(arg1.stationIndex))) {
+        stationIndex = Math.max(0, Math.floor(Number(arg1.stationIndex)));
+      }
       if (arg1.page_id !== undefined && arg1.page_id !== null) {
         page_id = Number(arg1.page_id);
       } else if (arg1.pageId !== undefined && arg1.pageId !== null) {
@@ -430,8 +513,8 @@ async function init() {
       ui.closeArticlePanel();
       ui.updateHoverLabel(null);
       sceneCtrl?.setThreads(null, [], currentYear);
-      sceneCtrl?.enterRoadMode(roadData, 0);
-      ui.openRoadView(roadData, sceneCtrl?.getRoadEventIndex() || 0);
+      sceneCtrl?.enterRoadMode(roadData, stationIndex);
+      ui.openRoadView(roadData, sceneCtrl?.getRoadEventIndex() ?? stationIndex);
     } catch (err) {
       if (roadSeq !== roadLoadSeq) return;
       ui.showError(t("error.network"));
@@ -443,6 +526,8 @@ async function init() {
   async function enterSummaryTrail(arg1 = {}, arg2 = null) {
     let lang = "fi";
     let page_id = null;
+    let initialFocusIdx = 0;
+    let initialReadMore = false;
     if (typeof arg1 === "string") {
       lang = arg1 || "fi";
       page_id = arg2 !== null && arg2 !== undefined ? Number(arg2) : 1256;
@@ -451,6 +536,10 @@ async function init() {
     } else if (arg1 && typeof arg1 === "object") {
       lang = arg1.lang || "fi";
       page_id = arg1.page_id ?? arg1.pageId ?? arg2;
+      if (Number.isFinite(Number(arg1.focusIdx))) {
+        initialFocusIdx = Math.max(0, Math.floor(Number(arg1.focusIdx)));
+      }
+      initialReadMore = Boolean(arg1.readMoreOpen);
     }
     if (page_id === null || page_id === undefined || Number.isNaN(Number(page_id))) {
       page_id = activeStar?.page_id ?? 1256;
@@ -495,9 +584,16 @@ async function init() {
       endLoading();
       ui.closeArticlePanel();
       sceneCtrl?.setThreads(null, [], currentYear);
-      const trailItems = ui.openSummaryTrail(summaryData);
+      const trailItems = ui.openSummaryTrail(summaryData, {
+        focusIdx: initialFocusIdx,
+        readMoreOpen: initialReadMore,
+      });
       summaryOpened = true;
+      const clampedFocus = ui.getSummaryFocusIndex?.() ?? 0;
       sceneCtrl?.enterSummaryTrail({ star, items: trailItems });
+      if (clampedFocus > 0) {
+        sceneCtrl?.updateSummaryTrailItems(trailItems, clampedFocus);
+      }
       if (pendingCompare) {
         ui.attachSummaryCompare(pendingCompare);
         pendingCompare = null;
@@ -790,8 +886,89 @@ async function init() {
     };
   }
 
-  const restoredFromHash = await restoreConstellationFromHash();
-  if (!restoredFromHash && stars.length > 0) {
+  async function restoreViewState(saved) {
+    if (!saved) return false;
+    try {
+      if (saved.lens && saved.lens !== "meaning") {
+        ui.setActiveLensButton(saved.lens);
+        sceneCtrl?.setLens(saved.lens);
+      }
+      sliderCtrl?.setYear(saved.year ?? 2026);
+
+      if (saved.view === "summary" && saved.article) {
+        await enterSummaryTrail({
+          lang: saved.article.lang,
+          page_id: saved.article.page_id,
+          focusIdx: saved.cardIndex,
+          readMoreOpen: saved.readMoreOpen,
+        });
+        if (saved.panelOpen && saved.panelArticle) {
+          await openStarArticle(saved.panelArticle.lang, saved.panelArticle.page_id, {
+            glide: false,
+            openTab: saved.panelTab,
+            asofYear: saved.year,
+            keepSummaryTrail: true,
+          });
+        }
+        return true;
+      }
+
+      if (saved.view === "road") {
+        await enterTalvitieRoad({
+          lang: saved.article?.lang || "fi",
+          page_id: saved.article?.page_id ?? null,
+          category: saved.category || null,
+          mode: "topic",
+          stationIndex: saved.stationIndex,
+        });
+        if (saved.panelOpen && saved.panelArticle) {
+          await openStarArticle(saved.panelArticle.lang, saved.panelArticle.page_id, {
+            glide: false,
+            openTab: saved.panelTab,
+            asofYear: saved.year,
+          });
+        }
+        return true;
+      }
+
+      if (saved.view === "ask" && saved.askQuery) {
+        ui.setSearchInput(saved.askQuery);
+        const askState = await runAskQuery(saved.askQuery);
+        const msIdx = saved.askMilestoneIdx;
+        const ms =
+          askState && msIdx >= 0 ? askState.askRes?.milestones?.[msIdx] : null;
+        if (ms) {
+          await selectMilestone(askState.askRes, ms, msIdx);
+        } else if (saved.panelOpen && saved.panelArticle) {
+          await openStarArticle(saved.panelArticle.lang, saved.panelArticle.page_id, {
+            glide: false,
+            openTab: saved.panelTab,
+            asofYear: saved.year,
+            keepConstellation: true,
+          });
+        }
+        return true;
+      }
+
+      if (saved.view === "panel" && saved.article) {
+        await openStarArticle(saved.article.lang, saved.article.page_id, {
+          glide: true,
+          openTab: saved.panelTab,
+          asofYear: saved.year,
+        });
+        return true;
+      }
+
+      return saved.view === "sky";
+    } catch {
+      return false;
+    }
+  }
+
+  const savedViewState = consumeViewState();
+  const restoredFromViewState = await restoreViewState(savedViewState);
+  const restoredFromHash = restoredFromViewState ? false : await restoreConstellationFromHash();
+  if (!restoredFromViewState && !restoredFromHash && stars.length > 0) {
     sliderCtrl.startIntro();
     attachIntroInteractionStop();
   }

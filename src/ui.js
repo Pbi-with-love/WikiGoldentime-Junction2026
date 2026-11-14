@@ -214,6 +214,7 @@ export function createUI({
   onExitSummaryTrail,
   onSelectSummaryIndex,
   onSummaryOpenFullArticle,
+  onBeforeLangSwitch,
 }) {
   const skyTopBar = document.getElementById("sky-top-bar");
   const searchForm = document.getElementById("search-form");
@@ -303,6 +304,7 @@ export function createUI({
     btn.addEventListener("click", () => {
       const code = btn.dataset.uiLang;
       if (code && code !== uiLang) {
+        onBeforeLangSwitch?.(code);
         setLang(code);
       }
     });
@@ -1349,7 +1351,7 @@ export function createUI({
     };
 
     skyTopBar.hidden = true;
-    if (langSwitcher) langSwitcher.hidden = true;
+    if (langSwitcher) langSwitcher.hidden = false;
     timesliderRoot.hidden = true;
     hoverLabel.hidden = true;
     if (skyLegend) skyLegend.hidden = true;
@@ -2675,7 +2677,7 @@ export function createUI({
     });
   }
 
-  function openSummaryTrail(summaryData) {
+  function openSummaryTrail(summaryData, { focusIdx = 0, readMoreOpen = false } = {}) {
     if (!summaryData || !summaryData.article) return [];
     if (activeRoadState) closeRoadView();
 
@@ -2683,19 +2685,20 @@ export function createUI({
     const art = summaryData.article;
     const totalSections = (summaryData.sections || []).length;
     const cssElements = createSummaryCssElements(items);
+    const clampedFocus = Math.max(0, Math.min(Math.max(0, items.length - 1), Number(focusIdx) || 0));
 
     activeSummaryState = {
       summaryData,
       compareData: null,
       items,
-      focusIdx: 0,
-      readMoreOpen: false,
+      focusIdx: clampedFocus,
+      readMoreOpen: Boolean(readMoreOpen),
       cssElements,
       summaryMinutes,
     };
 
     skyTopBar.hidden = true;
-    if (langSwitcher) langSwitcher.hidden = true;
+    if (langSwitcher) langSwitcher.hidden = false;
     timesliderRoot.hidden = true;
     hoverLabel.hidden = true;
     if (skyLegend) skyLegend.hidden = true;
@@ -2777,7 +2780,8 @@ export function createUI({
     const cardRect = summaryFocusedOverlay.getBoundingClientRect();
     if (cardRect.height > 40) {
       const halfH = cardRect.height * 0.5;
-      const minCenterY = 70 + halfH;
+      const topClearance = window.innerWidth <= 900 ? 140 : 70;
+      const minCenterY = topClearance + halfH;
       const maxCenterY = window.innerHeight - 66 - halfH;
       if (minCenterY <= maxCenterY) {
         targetY = Math.max(minCenterY, Math.min(maxCenterY, targetY));
@@ -3223,6 +3227,43 @@ export function createUI({
     },
     isPanelOpen() {
       return !articlePanel.hidden;
+    },
+    isAskOpen() {
+      return !askPanel.hidden;
+    },
+    setSearchInput(value) {
+      const text = String(value || "");
+      searchInput.value = text;
+      searchClearBtn.hidden = text.trim().length === 0;
+    },
+    getActivePanelTab() {
+      return !tabViewHistory.hidden ? "history" : "today";
+    },
+    getSummaryFocusIndex() {
+      return activeSummaryState?.focusIdx ?? 0;
+    },
+    getSummaryViewState() {
+      if (!activeSummaryState) return null;
+      const sd = activeSummaryState.summaryData || {};
+      const req = sd.requested || sd.article || {};
+      return {
+        lang: req.lang || sd.article?.lang || "fi",
+        page_id: req.page_id ?? sd.article?.page_id ?? null,
+        focusIdx: activeSummaryState.focusIdx || 0,
+        readMoreOpen: Boolean(activeSummaryState.readMoreOpen),
+      };
+    },
+    getRoadViewState() {
+      if (!activeRoadState) return null;
+      const rd = activeRoadState.roadData || {};
+      const topic = rd.topic || {};
+      const art = rd.article || {};
+      return {
+        lang: topic.lang || art.lang || "fi",
+        page_id: topic.page_id ?? art.page_id ?? null,
+        category: topic.category || null,
+        stationIndex: activeRoadState.activeIndex || 0,
+      };
     },
     getCurrentArticle() {
       return currentArticleState?.article || null;

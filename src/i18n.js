@@ -924,6 +924,100 @@ export function fallbackNoteText(shownLangCode, targetLang = lang) {
   return t("fallback.note", { target, shown }, targetLang);
 }
 
+export const VIEW_STATE_STORAGE_KEY = "wikimemory.viewState";
+
+const VALID_VIEWS = new Set(["sky", "panel", "summary", "road", "ask"]);
+const VALID_LENSES = new Set(["meaning", "history", "geography"]);
+const VALID_TABS = new Set(["today", "history"]);
+const VALID_ARTICLE_LANGS = new Set(["fi", "sv", "en"]);
+
+function sanitizeArticleRef(ref) {
+  if (!ref || typeof ref !== "object") return null;
+  const artLang = VALID_ARTICLE_LANGS.has(ref.lang) ? ref.lang : "fi";
+  const pageId = Number(ref.page_id);
+  if (!Number.isInteger(pageId) || pageId <= 0) return null;
+  return { lang: artLang, page_id: pageId };
+}
+
+function sanitizeNonNegInt(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
+export function normalizeViewState(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const view = VALID_VIEWS.has(raw.view) ? raw.view : "sky";
+  const lens = VALID_LENSES.has(raw.lens) ? raw.lens : "meaning";
+  const yearNum = Number(raw.year);
+  const year = Number.isFinite(yearNum)
+    ? Math.max(2001, Math.min(2026, Math.round(yearNum)))
+    : 2026;
+  const article = sanitizeArticleRef(raw.article);
+  const panelArticle = sanitizeArticleRef(raw.panelArticle);
+  const panelTab = VALID_TABS.has(raw.panelTab) ? raw.panelTab : "today";
+  const askQuery = typeof raw.askQuery === "string" ? raw.askQuery.trim() : "";
+  const category =
+    typeof raw.category === "string" && raw.category.trim() ? raw.category.trim() : null;
+
+  if (view === "panel" && !article) return null;
+  if (view === "summary" && !article) return null;
+  if (view === "road" && !article && !category) return null;
+  if (view === "ask" && !askQuery) return null;
+
+  return {
+    view,
+    lens,
+    year,
+    article,
+    cardIndex: sanitizeNonNegInt(raw.cardIndex, 0),
+    readMoreOpen: Boolean(raw.readMoreOpen),
+    stationIndex: sanitizeNonNegInt(raw.stationIndex, 0),
+    category,
+    askQuery,
+    askMilestoneIdx:
+      Number.isInteger(raw.askMilestoneIdx) && raw.askMilestoneIdx >= 0 ? raw.askMilestoneIdx : -1,
+    panelOpen: Boolean(raw.panelOpen && panelArticle),
+    panelArticle: raw.panelOpen ? panelArticle : null,
+    panelTab,
+  };
+}
+
+function getDefaultSessionStorage() {
+  try {
+    return typeof sessionStorage !== "undefined" ? sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveViewState(state, storage = getDefaultSessionStorage()) {
+  const normalized = normalizeViewState(state);
+  if (!normalized || !storage) return false;
+  try {
+    storage.setItem(VIEW_STATE_STORAGE_KEY, JSON.stringify(normalized));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function consumeViewState(storage = getDefaultSessionStorage()) {
+  if (!storage) return null;
+  let raw = null;
+  try {
+    raw = storage.getItem(VIEW_STATE_STORAGE_KEY);
+    storage.removeItem(VIEW_STATE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    return normalizeViewState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 export function setLang(code) {
   if (!SUPPORTED.includes(code)) return;
   try {

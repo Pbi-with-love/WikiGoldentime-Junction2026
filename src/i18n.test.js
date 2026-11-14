@@ -13,6 +13,10 @@ import {
   askBasedOnLabel,
   fallbackNoteText,
   setLang,
+  VIEW_STATE_STORAGE_KEY,
+  normalizeViewState,
+  saveViewState,
+  consumeViewState,
 } from "./i18n.js";
 import { getAskProvenance } from "./ui.js";
 
@@ -268,4 +272,110 @@ test("026 ask.basedOn i18n keys and getAskProvenance label rule", () => {
   assert.deepEqual(getAskProvenance({ pending: true, out_lang: null, sources: [{ lang: "fi" }] }, "en"), {
     kind: "none",
   });
+});
+
+test("028 saveViewState and consumeViewState round-trip views, consume once, and handle errors", () => {
+  const store = new Map();
+  const mockStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+
+  // Summary Trail state with clamped/sanitized values
+  assert.equal(
+    saveViewState(
+      {
+        view: "summary",
+        lens: "history",
+        year: 2012,
+        article: { lang: "fi", page_id: 1256 },
+        cardIndex: 2,
+        readMoreOpen: true,
+      },
+      mockStorage
+    ),
+    true
+  );
+  const sum = consumeViewState(mockStorage);
+  assert.equal(sum.view, "summary");
+  assert.equal(sum.lens, "history");
+  assert.equal(sum.year, 2012);
+  assert.deepEqual(sum.article, { lang: "fi", page_id: 1256 });
+  assert.equal(sum.cardIndex, 2);
+  assert.equal(sum.readMoreOpen, true);
+  // Consumed once
+  assert.equal(consumeViewState(mockStorage), null);
+
+  // Road state (article road & category road)
+  assert.equal(
+    saveViewState(
+      { view: "road", lens: "geography", year: 2026, article: { lang: "fi", page_id: 65432 }, stationIndex: 4 },
+      mockStorage
+    ),
+    true
+  );
+  const road = consumeViewState(mockStorage);
+  assert.equal(road.view, "road");
+  assert.equal(road.lens, "geography");
+  assert.equal(road.stationIndex, 4);
+
+  assert.equal(
+    saveViewState({ view: "road", category: "Suomen suuriruhtinaskunta", stationIndex: 2 }, mockStorage),
+    true
+  );
+  const catRoad = consumeViewState(mockStorage);
+  assert.equal(catRoad.category, "Suomen suuriruhtinaskunta");
+  assert.equal(catRoad.stationIndex, 2);
+
+  // Ask state with milestone
+  assert.equal(
+    saveViewState(
+      { view: "ask", askQuery: "How did the Winter War end?", askMilestoneIdx: 1, year: 2006 },
+      mockStorage
+    ),
+    true
+  );
+  const askState = consumeViewState(mockStorage);
+  assert.equal(askState.view, "ask");
+  assert.equal(askState.askQuery, "How did the Winter War end?");
+  assert.equal(askState.askMilestoneIdx, 1);
+
+  // Panel state
+  assert.equal(
+    saveViewState(
+      { view: "panel", article: { lang: "fi", page_id: 1256 }, panelTab: "history", year: 2006 },
+      mockStorage
+    ),
+    true
+  );
+  const panel = consumeViewState(mockStorage);
+  assert.equal(panel.view, "panel");
+  assert.equal(panel.panelTab, "history");
+  assert.equal(panel.year, 2006);
+
+  // Incomplete view states are rejected -> fallback to sky
+  assert.equal(normalizeViewState({ view: "summary" }), null);
+  assert.equal(normalizeViewState({ view: "ask", askQuery: "   " }), null);
+  assert.equal(normalizeViewState({ view: "panel", article: { lang: "fi", page_id: -1 } }), null);
+
+  // Malformed JSON in storage returns null cleanly
+  store.set(VIEW_STATE_STORAGE_KEY, "{not-json");
+  assert.equal(consumeViewState(mockStorage), null);
+  assert.equal(store.has(VIEW_STATE_STORAGE_KEY), false);
+
+  // Throwing storage fails safely
+  const throwingStorage = {
+    getItem() {
+      throw new Error("SecurityError");
+    },
+    setItem() {
+      throw new Error("SecurityError");
+    },
+    removeItem() {
+      throw new Error("SecurityError");
+    },
+  };
+  assert.equal(saveViewState({ view: "sky" }, throwingStorage), false);
+  assert.equal(consumeViewState(throwingStorage), null);
 });
