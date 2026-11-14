@@ -15,6 +15,9 @@ must not depend on any summary cache. Precompute them once for **all** Finnish a
 `wikihistory.section_history` (no LLM); `/api/summary` reads that table with one indexed SELECT.
 The live SVT computation stays only as the fallback for a missing or stale row.
 
+
+**Amendment 018-A (orchestrator, after 016 merged as 48458e8):** 016 added a fallback table `wikirag.history_cache (lang, page_id, rev_id, json, created_at)` for background-built history (0 rows at merge). 018 must absorb it: either make `section_history` the single store and drop the `history_cache` code path (migration drops the table if empty; report its row count first), or justify keeping both. Read the merged 016 code (`history_status`, `fi_history`) before designing the read path. Run `node scripts/export_i18n_review.mjs > docs/i18n-review.csv` is NOT your job (orchestrator does it).
+
 ## Definitions (use these names in code, tests and logs)
 - **section history result** (for one fi article): exactly what `/api/summary` needs today, as one
   JSON object, keys in this order:
