@@ -21,8 +21,12 @@ PASSAGE_MAX_CHARS = 240
 SHORT_ARTICLE_MIN_WORDS = 1500
 SHORT_ARTICLE_MIN_SECTIONS = 4
 
-# Calibrated on 23 Finnish articles (3 demo + 20 deterministic sample); see artifacts/017-compare/calibration.md
-THRESHOLD = 0.35
+# Calibrated on 23 Finnish articles (132 hand-labelled pairs); see artifacts/027-compare/report.md
+THRESHOLD = 0.45
+# Spec 027: how a fi section picks its sibling passage.
+# "mutual_section" filters to mutual-best sibling chunks and ranks by 0.5*d_chunk + 0.5*d_section (top-2 distinct sibling chunks).
+RULE = "mutual_section"
+VALID_RULES = ("baseline", "mutual", "section", "section_mutual", "mutual_section")
 
 PAIR_DISTANCES_SQL = """
 SELECT f.chunk_no, s.chunk_no, VEC_DISTANCE_COSINE(f.embedding, s.embedding) AS d
@@ -35,6 +39,12 @@ FI_CHUNK_SECTIONS_SQL = """
 SELECT chunk_no, section
 FROM chunk
 WHERE lang = 'fi' AND page_id = ?
+"""
+
+SIBLING_CHUNK_SECTIONS_SQL = """
+SELECT chunk_no, section
+FROM chunk
+WHERE lang = ? AND page_id = ?
 """
 
 SIBLING_CHUNKS_BY_NO_SQL = """
@@ -78,6 +88,101 @@ def build_section_url(article_url: str, section: str | None) -> str:
     return f"{article_url}#{anchor}"
 
 
+
+def _best_pair(pairs: list[tuple[float, int]]) -> tuple[float, int] | None:
+    """Smallest (distance, sibling chunk_no) pair; ties go to the lower chunk_no."""
+    return min(pairs) if pairs else None
+
+
+def _rule_winners(
+    rule: str,
+    sec_chunks: dict[int, list[int]],
+    sec_heading: dict[int, str],
+    fi_chunk_sections: dict[int, str | None],
+    pairs: list[tuple[int, int, float]],
+    sib_sections: dict[int, str | None],
+) -> dict[int, tuple[float, int] | None]:
+    """Compute winning (score, sibling chunk_no) per fi section number for one sibling language."""
+    if rule not in VALID_RULES or rule == "baseline":
+        raise ValueError(f"Unsupported rule for _rule_winners: {rule!r}")
+
+    # Best fi chunk for every sibling chunk across all fi chunks (including intro/dropped headings
+    # so sibling chunks belonging to the intro or notes cannot be claimed by another section).
+    best_fi_for_sib: dict[int, tuple[float, int]] = {}
+    for f, s_, d in pairs:
+        cur = best_fi_for_sib.get(s_)
+        if cur is None or (d, f) < cur:
+            best_fi_for_sib[s_] = (d, f)
+
+    out: dict[int, tuple[float, int] | None] = {}
+    if rule == "mutual":
+        for no, chunks in sec_chunks.items():
+            heading = sec_heading[no]
+            chunk_set = set(chunks)
+            cand = [
+                (d, s_)
+                for f, s_, d in pairs
+                if f in chunk_set and fi_chunk_sections.get(best_fi_for_sib[s_][1]) == heading
+            ]
+            out[no] = _best_pair(cand)
+        return out
+
+    # Group pairs by (fi heading, sibling section) for section-level scoring.
+    chunk_to_heading = {f: h for f, h in fi_chunk_sections.items() if h is not None}
+    by_cell: dict[tuple[str, str | None], list[tuple[float, int]]] = {}
+    for f, s_, d in pairs:
+        h = chunk_to_heading.get(f)
+        if h is None:
+            continue
+        by_cell.setdefault((h, sib_sections.get(s_)), []).append((d, s_))
+
+    def cell_dist(cell: list[tuple[float, int]]) -> float:
+        # Mean of top-2 distinct sibling chunks so 1-chunk sections are not penalized by duplicate pairs.
+        best_per_sib: dict[int, float] = {}
+        for d, s_ in cell:
+            if s_ not in best_per_sib or d < best_per_sib[s_]:
+                best_per_sib[s_] = d
+        top = sorted(best_per_sib.values())[:2]
+        return 1.0 - sum(1.0 - d for d in top) / len(top)
+
+    cell_dists = {key: cell_dist(cell) for key, cell in by_cell.items()}
+
+    if rule == "mutual_section":
+        for no, chunks in sec_chunks.items():
+            heading = sec_heading[no]
+            chunk_set = set(chunks)
+            cand = [
+                (0.5 * d + 0.5 * cell_dists[(heading, sib_sections.get(s_))], s_)
+                for f, s_, d in pairs
+                if f in chunk_set and fi_chunk_sections.get(best_fi_for_sib[s_][1]) == heading
+            ]
+            out[no] = _best_pair(cand)
+        return out
+
+    best_sec_for_sib: dict[str | None, tuple[float, str]] = {}
+    for (h, t), cd in cell_dists.items():
+        cur = best_sec_for_sib.get(t)
+        if cur is None or (cd, h) < cur:
+            best_sec_for_sib[t] = (cd, h)
+
+    for no in sec_chunks:
+        heading = sec_heading[no]
+        best: tuple[float, str | None] | None = None
+        for (h, t), cd in cell_dists.items():
+            if h != heading:
+                continue
+            if rule == "section_mutual" and best_sec_for_sib[t][1] != heading:
+                continue
+            if best is None or (cd, str(t)) < (best[0], str(best[1])):
+                best = (cd, t)
+        if best is None:
+            out[no] = None
+            continue
+        chunk = _best_pair(by_cell[(heading, best[1])])
+        out[no] = (best[0], chunk[1]) if chunk else None
+    return out
+
+
 def compute_section_winners(
     kept_sections: list[dict[str, Any]],
     fi_chunk_sections: dict[int, str | None],
@@ -85,12 +190,17 @@ def compute_section_winners(
     siblings: dict[str, dict[str, Any] | None],
     *,
     article_page_id: int | None = None,
+    rule: str = RULE,
+    sib_chunk_sections: dict[str, dict[int, str | None]] | None = None,
 ) -> tuple[dict[tuple[int, str], tuple[float, int] | None], set[int]]:
     """Compute min distance and winning sibling chunk_no for each (section no, sib_lang).
 
     Returns ``(winners, sections_without_chunks)`` where ``winners[(no, sib_lang)]`` is
     ``(rounded_distance, sib_chunk_no)`` or ``None``.
     """
+    if rule not in VALID_RULES:
+        raise ValueError(f"Unknown compare rule: {rule!r}")
+
     # shortcut: duplicate headings in the same article share their chunks
     chunks_by_heading: dict[str, list[int]] = {}
     for chunk_no, sec_name in fi_chunk_sections.items():
@@ -114,6 +224,24 @@ def compute_section_winners(
     winners: dict[tuple[int, str], tuple[float, int] | None] = {}
     missing_chunk_nos: set[int] = set()
 
+    rule_cache: dict[str, dict[int, tuple[float, int] | None]] = {}
+    if rule != "baseline":
+        sec_chunks = {
+            int(sec["no"]): chunks_by_heading.get(str(sec["heading"]), []) for sec in kept_sections
+        }
+        sec_heading = {int(sec["no"]): str(sec["heading"]) for sec in kept_sections}
+        for sib_lang in SIBLING_LANGS:
+            if siblings.get(sib_lang) is None:
+                continue
+            rule_cache[sib_lang] = _rule_winners(
+                rule,
+                {n: c for n, c in sec_chunks.items() if c},
+                sec_heading,
+                fi_chunk_sections,
+                distance_pairs.get(sib_lang, []),
+                (sib_chunk_sections or {}).get(sib_lang, {}),
+            )
+
     for sec in kept_sections:
         sec_no = int(sec["no"])
         heading = str(sec["heading"])
@@ -133,6 +261,16 @@ def compute_section_winners(
         for sib_lang in SIBLING_LANGS:
             if siblings.get(sib_lang) is None:
                 winners[(sec_no, sib_lang)] = None
+                continue
+            if rule != "baseline":
+                w = rule_cache[sib_lang].get(sec_no)
+                if w is not None:
+                    winners[(sec_no, sib_lang)] = (round(w[0], 3), w[1])
+                elif distance_pairs.get(sib_lang):
+                    # Sibling has chunks and fi section has chunks, but rule rejected all candidates.
+                    winners[(sec_no, sib_lang)] = (1.0, -1)
+                else:
+                    winners[(sec_no, sib_lang)] = None
                 continue
             per_fi = best_by_fi_chunk.get(sib_lang, {})
             best_pair: tuple[float, int] | None = None
@@ -220,6 +358,8 @@ def aggregate_compare_sections(
     *,
     threshold: float = THRESHOLD,
     article_page_id: int | None = None,
+    rule: str = RULE,
+    sib_chunk_sections: dict[str, dict[int, str | None]] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure end-to-end section comparison from distance pairs and chunk maps (no DB access)."""
     winners, _ = compute_section_winners(
@@ -228,6 +368,8 @@ def aggregate_compare_sections(
         distance_pairs=distance_pairs,
         siblings=siblings,
         article_page_id=article_page_id,
+        rule=rule,
+        sib_chunk_sections=sib_chunk_sections,
     )
     return format_compare_sections(
         kept_sections=kept_sections,
@@ -271,6 +413,7 @@ def get_compare_response(
     rag_opener: Callable[[], mariadb.Connection] | None = None,
     *,
     threshold: float = THRESHOLD,
+    rule: str = RULE,
 ) -> dict[str, Any]:
     """Handle GET /api/compare/{lang}/{page_id}."""
     if lang not in VALID_LANGS:
@@ -326,6 +469,7 @@ def get_compare_response(
                 }
 
             distance_pairs: dict[str, list[tuple[int, int, float]]] = {}
+            sib_chunk_sections: dict[str, dict[int, str | None]] = {}
             for sib_lang in SIBLING_LANGS:
                 sib_meta = siblings[sib_lang]
                 if sib_meta is None:
@@ -334,6 +478,11 @@ def get_compare_response(
                 distance_pairs[sib_lang] = [
                     (int(r[0]), int(r[1]), float(r[2])) for r in cur.fetchall()
                 ]
+                if rule != "baseline":
+                    cur.execute(SIBLING_CHUNK_SECTIONS_SQL, (sib_lang, sib_meta["page_id"]))
+                    sib_chunk_sections[sib_lang] = {
+                        int(r[0]): r[1] for r in cur.fetchall()
+                    }
 
             cur.execute(FI_CHUNK_SECTIONS_SQL, (page_id,))
             fi_chunk_sections: dict[int, str | None] = {
@@ -346,6 +495,8 @@ def get_compare_response(
                 distance_pairs=distance_pairs,
                 siblings=siblings,
                 article_page_id=page_id,
+                rule=rule,
+                sib_chunk_sections=sib_chunk_sections if rule != "baseline" else None,
             )
 
             sibling_chunks: dict[str, dict[int, tuple[str | None, str]]] = {}

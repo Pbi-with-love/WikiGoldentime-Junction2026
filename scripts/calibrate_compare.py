@@ -145,7 +145,9 @@ def dump_blind_texts(cur, samples: list[dict[str, Any]], page_ids: list[int], ou
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def compute_calibration_rows(cur, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_calibration_rows(
+    cur, samples: list[dict[str, Any]], rule: str = "baseline"
+) -> list[dict[str, Any]]:
     """Compute best distance, sibling section, and passage snippet for sibling and random pairs."""
     rows: list[dict[str, Any]] = []
     n = len(samples)
@@ -189,6 +191,11 @@ def compute_calibration_rows(cur, samples: list[dict[str, Any]]) -> list[dict[st
                 distance_pairs=distance_pairs,
                 siblings=siblings_arg,
                 article_page_id=pid,
+                rule=rule,
+                sib_chunk_sections={
+                    sl: {c: v[0] for c, v in sib_chunks_map[(sl, sib_source["siblings"][sl]["page_id"])].items()}
+                    for sl in ("sv", "en")
+                },
             )
             for sec in s["kept_sections"]:
                 sec_no = int(sec["no"])
@@ -198,8 +205,13 @@ def compute_calibration_rows(cur, samples: list[dict[str, Any]]) -> list[dict[st
                     if win is None:
                         continue
                     dist, win_cno = win
-                    sib_sec, sib_text = sib_chunks_map[(sib_lang, sib_pid)][win_cno]
-                    passage80 = compare.format_passage(sib_text, max_chars=80).replace("\t", " ").replace("\n", " ")
+                    if win_cno < 0:
+                        sib_sec_label = "<NONE>"
+                        passage80 = ""
+                    else:
+                        sib_sec, sib_text = sib_chunks_map[(sib_lang, sib_pid)][win_cno]
+                        sib_sec_label = sib_sec if sib_sec is not None else "<INTRO>"
+                        passage80 = compare.format_passage(sib_text, max_chars=80).replace("\t", " ").replace("\n", " ")
                     rows.append(
                         {
                             "pair_type": pair_type,
@@ -212,7 +224,7 @@ def compute_calibration_rows(cur, samples: list[dict[str, Any]]) -> list[dict[st
                             "sib_chunks": len(sib_chunks_map[(sib_lang, sib_pid)]),
                             "distance": f"{dist:.3f}",
                             "sib_chunk_no": win_cno,
-                            "sib_section": sib_sec if sib_sec is not None else "<INTRO>",
+                            "sib_section": sib_sec_label,
                             "passage_80": passage80,
                         }
                     )
@@ -281,6 +293,10 @@ def evaluate_labels(
         en_m = _metrics([x for x in labelled if x["lang"] == "en"], thr)
         sweep.append({"threshold": thr, "overall": overall, "sv": sv_m, "en": en_m})
 
+    for row in sweep:
+        m = [x for x in labelled if x["distance"] <= row["threshold"] and x["label"] == 1 and x["passage_ok"] in ("0", "1")]
+        row["passage_ok"] = sum(1 for x in m if x["passage_ok"] == "1") / len(m) if m else 0.0
+
     return {
         "labelled": labelled,
         "hist": hist,
@@ -296,6 +312,7 @@ def main() -> None:
         default=None,
         help="Optional comma-separated page_ids to dump blind text for hand labelling",
     )
+    parser.add_argument("--rules", default="baseline", help="Comma-separated rules (spec 027)")
     parser.add_argument("--labels", default="data/compare_labels.tsv", help="Path to hand labels TSV")
     args = parser.parse_args()
 
@@ -325,7 +342,9 @@ def main() -> None:
                 print(f"Wrote blind text to {blind_path}")
                 return
 
-            cal_rows = compute_calibration_rows(cur, samples)
+            rules = [r.strip() for r in args.rules.split(",") if r.strip()]
+            cal_by_rule = {r: compute_calibration_rows(cur, samples, r) for r in rules}
+            cal_rows = cal_by_rule[rules[0]]
         finally:
             cur.close()
     finally:
@@ -354,21 +373,27 @@ def main() -> None:
 
     labels_path = Path(args.labels)
     if labels_path.exists():
-        ev = evaluate_labels(cal_rows, labels_path)
-        print("\nHistogram:")
-        for b in ev["hist"]:
-            print(f"  {b['bin']}  label1={b['label1']:3d}  label0={b['label0']:3d}  random={b['random']:3d}")
-        print("\nThreshold sweep:")
-        for row in ev["sweep"]:
-            o = row["overall"]
-            sv = row["sv"]
-            en = row["en"]
-            print(
-                f"  thr={row['threshold']:.3f}  "
-                f"P={o['precision']:.3f} R={o['recall']:.3f} F1={o['f1']:.3f} "
-                f"(sv P={sv['precision']:.3f} R={sv['recall']:.3f}; "
-                f"en P={en['precision']:.3f} R={en['recall']:.3f})"
-            )
+        for rule_name, rows_r in cal_by_rule.items():
+            print(f"\n##### RULE {rule_name}")
+            with (out_dir / f"calibration_{rule_name}.tsv").open("w", encoding="utf-8", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
+                w.writeheader()
+                w.writerows(rows_r)
+            ev = evaluate_labels(rows_r, labels_path)
+            print("\nHistogram:")
+            for b in ev["hist"]:
+                print(f"  {b['bin']}  label1={b['label1']:3d}  label0={b['label0']:3d}  random={b['random']:3d}")
+            print("\nThreshold sweep:")
+            for row in ev["sweep"]:
+                o = row["overall"]
+                sv = row["sv"]
+                en = row["en"]
+                print(
+                    f"  thr={row['threshold']:.3f}  "
+                    f"P={o['precision']:.3f} R={o['recall']:.3f} F1={o['f1']:.3f} "
+                    f"(sv P={sv['precision']:.3f} R={sv['recall']:.3f}; "
+                    f"en P={en['precision']:.3f} R={en['recall']:.3f}) passage_ok={row['passage_ok']:.3f}"
+                )
 
 
 if __name__ == "__main__":

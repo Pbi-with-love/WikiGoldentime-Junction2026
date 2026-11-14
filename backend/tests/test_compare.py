@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 from fastapi.testclient import TestClient
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -61,6 +62,7 @@ def test_min_aggregation_and_threshold_boundary():
         distance_pairs=distance_pairs,
         sibling_chunks=sibling_chunks,
         threshold=0.35,
+        rule="baseline",
     )
 
     assert len(res) == 2
@@ -146,6 +148,7 @@ def test_duplicate_headings_share_chunks():
         distance_pairs=distance_pairs,
         sibling_chunks=sibling_chunks,
         threshold=0.35,
+        rule="baseline",
     )
 
     assert res[0]["sv"]["match"] is True
@@ -228,6 +231,13 @@ class _FakeCursor:
             (fi_pid,) = params
             self.description = [("chunk_no",), ("section",)]
             self._rows = list(self.state["fi_chunks"].get(int(fi_pid), []))
+        elif "SELECT chunk_no, section FROM chunk WHERE lang = ? AND page_id = ?" in norm:
+            lang, pid = params
+            self.description = [("chunk_no",), ("section",)]
+            self._rows = [
+                (cno, sec)
+                for (cno, sec, _) in self.state["sib_chunks"].get((lang, int(pid)), [])
+            ]
         elif "SELECT chunk_no, section, text FROM chunk WHERE lang = ? AND page_id = ? AND chunk_no IN" in norm:
             lang, pid, *cnos = params
             self.description = [("chunk_no",), ("section",), ("text",)]
@@ -360,6 +370,14 @@ def test_endpoint_errors_short_and_real_flow(monkeypatch):
         assert data["sections"][0]["sv"]["match"] is True
         assert data["sections"][0]["en"]["match"] is False
         assert data["sections"][1]["en"]["match"] is True
+        # Section 3 has no mutual sv chunk -> explicit non-match dict (not None), so UI shows Only in Finnish
+        assert data["sections"][2]["sv"] == {
+            "match": False,
+            "distance": 1.0,
+            "section": None,
+            "passage": None,
+            "url": None,
+        }
         # Ensure winning sibling chunks were fetched only for matching chunk_nos (sv: 1,3; en: 1)
         chunk_fetches = [q for q in state["queries"] if "chunk_no IN" in q[0]]
         assert len(chunk_fetches) == 2
@@ -371,3 +389,143 @@ def test_endpoint_errors_short_and_real_flow(monkeypatch):
     assert [(s["no"], s["heading"]) for s in data["sections"]] == [
         (s["no"], s["heading"]) for s in expected_secs
     ]
+
+
+def test_mutual_and_mutual_section_rules():
+    """Verify Spec 027 rules with fake vector distance pairs (no DB):
+    - mutual rejects a fi-only section that borrows a sibling chunk belonging to another fi section
+    - mutual_section avoids a single stray chunk in an unrelated sibling section (B2 Moskovan rauha)
+    """
+    kept = [
+        {"no": 1, "heading": "Moskovan rauha"},
+        {"no": 2, "heading": "Ulkomaiden apu"},
+        {"no": 3, "heading": "Kunniamerkit"},
+    ]
+    fi_chunks = {1: "Moskovan rauha", 2: "Ulkomaiden apu", 3: "Kunniamerkit"}
+    siblings = {
+        "sv": None,
+        "en": {"page_id": 33924, "title": "Winter War", "url": "https://en.wikipedia.org/wiki/Winter_War"},
+    }
+    # Sibling sections:
+    # - en:10, 11 in "Soviet breakthrough" (both genuinely match Moskovan rauha at 0.318 and 0.320)
+    # - en:20 in "Foreign support" (stray match to Moskovan rauha at 0.313, while en:21 matches Ulkomaiden apu at 0.260)
+    # - Kunniamerkit has no genuine match; its closest chunk is en:21 at 0.340 (whose best fi is Ulkomaiden apu)
+    distance_pairs = {
+        "en": [
+            (1, 10, 0.318),
+            (1, 11, 0.320),
+            (1, 20, 0.313),
+            (1, 21, 0.500),
+            (2, 10, 0.480),
+            (2, 11, 0.490),
+            (2, 20, 0.380),
+            (2, 21, 0.260),
+            (3, 10, 0.550),
+            (3, 11, 0.560),
+            (3, 20, 0.520),
+            (3, 21, 0.340),
+        ],
+    }
+    sib_chunk_sections = {
+        "en": {
+            10: "Soviet breakthrough",
+            11: "Soviet breakthrough",
+            20: "Foreign support",
+            21: "Foreign support",
+        }
+    }
+    sibling_chunks = {
+        "en": {
+            10: ("Soviet breakthrough", "Winter War — Soviet breakthrough\n\nMoscow Peace Treaty terms."),
+            11: ("Soviet breakthrough", "Winter War — Soviet breakthrough\n\nBorder cessions."),
+            20: ("Foreign support", "Winter War — Foreign support\n\nSwedish iron ore and Allied troops."),
+            21: ("Foreign support", "Winter War — Foreign support\n\nAllied aid offers to Finland."),
+        }
+    }
+
+    # Baseline lets Moskovan rauha pick the stray chunk en:20 (0.313) and Kunniamerkit steal en:21 (0.340)
+    base = compare.aggregate_compare_sections(
+        kept_sections=kept,
+        fi_chunk_sections=fi_chunks,
+        siblings=siblings,
+        distance_pairs=distance_pairs,
+        sibling_chunks=sibling_chunks,
+        threshold=0.35,
+        rule="baseline",
+    )
+    assert base[0]["en"]["section"] == "Foreign support"
+    assert base[2]["en"]["match"] is True
+
+    # Mutual eliminates the false positive on Kunniamerkit (returns match=False, distance=1.0, not None)
+    mut = compare.aggregate_compare_sections(
+        kept_sections=kept,
+        fi_chunk_sections=fi_chunks,
+        siblings=siblings,
+        distance_pairs=distance_pairs,
+        sibling_chunks=sibling_chunks,
+        threshold=0.45,
+        rule="mutual",
+        sib_chunk_sections=sib_chunk_sections,
+    )
+    assert mut[0]["en"]["section"] == "Foreign support"  # stray chunk en:20 is still mutual at chunk level
+    assert mut[2]["en"] == {"match": False, "distance": 1.0, "section": None, "passage": None, "url": None}
+
+    # Section rule picks Soviet breakthrough (top-2 mean 0.319 vs Foreign support top-2 mean 0.4065)
+    sec = compare.aggregate_compare_sections(
+        kept_sections=kept,
+        fi_chunk_sections=fi_chunks,
+        siblings=siblings,
+        distance_pairs=distance_pairs,
+        sibling_chunks=sibling_chunks,
+        threshold=0.35,
+        rule="section",
+        sib_chunk_sections=sib_chunk_sections,
+    )
+    assert sec[0]["en"]["section"] == "Soviet breakthrough"
+    assert sec[0]["en"]["distance"] == 0.319
+
+    # section_mutual also picks Soviet breakthrough and rejects Kunniamerkit
+    sm = compare.aggregate_compare_sections(
+        kept_sections=kept,
+        fi_chunk_sections=fi_chunks,
+        siblings=siblings,
+        distance_pairs=distance_pairs,
+        sibling_chunks=sibling_chunks,
+        threshold=0.45,
+        rule="section_mutual",
+        sib_chunk_sections=sib_chunk_sections,
+    )
+    assert sm[0]["en"]["section"] == "Soviet breakthrough"
+    assert sm[2]["en"] == {"match": False, "distance": 1.0, "section": None, "passage": None, "url": None}
+
+    # mutual_section (new default) fixes BOTH: Moskovan rauha -> Soviet breakthrough (0.319) AND Kunniamerkit -> non-match
+    ms = compare.aggregate_compare_sections(
+        kept_sections=kept,
+        fi_chunk_sections=fi_chunks,
+        siblings=siblings,
+        distance_pairs=distance_pairs,
+        sibling_chunks=sibling_chunks,
+        threshold=compare.THRESHOLD,
+        rule=compare.RULE,
+        sib_chunk_sections=sib_chunk_sections,
+    )
+    assert compare.RULE == "mutual_section"
+    assert compare.THRESHOLD == 0.45
+    assert ms[0]["en"]["match"] is True
+    assert ms[0]["en"]["section"] == "Soviet breakthrough"
+    assert ms[0]["en"]["passage"] == "Moscow Peace Treaty terms."
+    assert ms[0]["en"]["distance"] == 0.319
+    assert ms[1]["en"]["match"] is True
+    assert ms[1]["en"]["section"] == "Foreign support"
+    assert ms[2]["en"] == {"match": False, "distance": 1.0, "section": None, "passage": None, "url": None}
+
+
+def test_unknown_compare_rule_raises():
+    with pytest.raises(ValueError, match="Unknown compare rule"):
+        compare.compute_section_winners(
+            kept_sections=[{"no": 1, "heading": "Tausta"}],
+            fi_chunk_sections={1: "Tausta"},
+            distance_pairs={},
+            siblings={"sv": None, "en": None},
+            rule="nonexistent_rule",
+        )
