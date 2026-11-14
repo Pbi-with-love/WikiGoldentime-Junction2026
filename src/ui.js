@@ -5,9 +5,44 @@ import {
   fmtDate,
   langName,
   mtFromLabel,
+  askBasedOnLabel,
   fallbackNoteText,
   setLang,
 } from "./i18n.js";
+
+/**
+ * Determine provenance display for an Ask response.
+ * Machine-translated label is shown ONLY for translated ui variants whose source language differs.
+ */
+export function getAskProvenance(askRes, targetUiLang = uiLang) {
+  if (!askRes || askRes.pending) {
+    return { kind: "none" };
+  }
+  const sourceLangs = [];
+  for (const s of askRes.sources || []) {
+    if (s?.lang && !sourceLangs.includes(s.lang)) {
+      sourceLangs.push(s.lang);
+    }
+  }
+  const outLang = askRes.out_lang || null;
+  const qLang = askRes.question_lang || null;
+  if (outLang) {
+    if (targetUiLang && outLang !== targetUiLang) {
+      return { kind: "fallback", shownLang: outLang };
+    }
+    if (qLang && qLang !== outLang) {
+      return { kind: "translated", fromLangs: [qLang] };
+    }
+    if (sourceLangs.length > 0) {
+      return { kind: "sources", langs: sourceLangs };
+    }
+    return { kind: "none" };
+  }
+  if (sourceLangs.length > 0) {
+    return { kind: "sources", langs: sourceLangs };
+  }
+  return { kind: "none" };
+}
 import { ask } from "./api.js";
 
 const ASK_POLL_INTERVAL_MS = 3000;
@@ -544,6 +579,8 @@ export function createUI({
       )
       .join("");
 
+    const provenance = getAskProvenance(askRes, uiLang);
+
     let milestonesHtml = "";
     if (askRes.pending) {
       milestonesHtml = "";
@@ -598,7 +635,7 @@ export function createUI({
       if (selectedMs) {
         const oldidUrl = selectedMs.url || buildWikiOldidUrl("fi", selectedMs.rev_id);
         const diffHtml = milestoneDiff ? renderDiffPartsHtml(milestoneDiff.parts) : "";
-        const showMsMt = Boolean(askRes.out_lang && askRes.out_lang !== "fi");
+        const showMsMt = provenance.kind === "translated" && askRes.out_lang !== "fi";
         const msMtHtml = showMsMt
           ? `<span class="mt-label">${escapeHtml(mtFromLabel(["fi"]))}</span>`
           : "";
@@ -675,22 +712,16 @@ export function createUI({
     }
 
     let askProvenanceHtml = "";
-    if (askRes.out_lang) {
-      if (askRes.out_lang !== uiLang) {
-        askProvenanceHtml = `<p class="i18n-fallback-note">${escapeHtml(
-          fallbackNoteText(askRes.out_lang)
-        )}</p>`;
-      } else {
-        const diffSourceLangs = [];
-        for (const s of askRes.sources || []) {
-          if (s.lang && s.lang !== askRes.out_lang && !diffSourceLangs.includes(s.lang)) {
-            diffSourceLangs.push(s.lang);
-          }
-        }
-        if (diffSourceLangs.length > 0) {
-          askProvenanceHtml = `<div class="mt-label">${escapeHtml(mtFromLabel(diffSourceLangs))}</div>`;
-        }
-      }
+    if (provenance.kind === "fallback") {
+      askProvenanceHtml = `<p class="i18n-fallback-note">${escapeHtml(
+        fallbackNoteText(provenance.shownLang)
+      )}</p>`;
+    } else if (provenance.kind === "translated") {
+      askProvenanceHtml = `<div class="mt-label">${escapeHtml(mtFromLabel(provenance.fromLangs))}</div>`;
+    } else if (provenance.kind === "sources") {
+      askProvenanceHtml = `<div class="ask-source-langs">${escapeHtml(
+        askBasedOnLabel(provenance.langs)
+      )}</div>`;
     }
 
     const waiting = isAskWaiting(askRes);
@@ -2383,7 +2414,6 @@ export function createUI({
             )}</span>
           </div>
           <h3 class="summary-trail-title">${escapeHtml(headingText)}</h3>
-          <div class="mt-label">${escapeHtml(t("summary.fiHistoryLabel"))}</div>
           <p class="i18n-fallback-note summary-history-loading">${escapeHtml(t("summary.historyBuilding"))}</p>
         `;
       }
@@ -2429,7 +2459,6 @@ export function createUI({
           <span class="summary-trail-kicker-right">${escapeHtml(fmtNumber(fiSections.length))}</span>
         </div>
         <h3 class="summary-trail-title" lang="fi">${titleHtml}</h3>
-        <div class="mt-label">${escapeHtml(t("summary.fiHistoryLabel"))}</div>
         ${rowsHtml ? `<ul class="summary-fi-history-list">${rowsHtml}</ul>` : ""}
       `;
     }

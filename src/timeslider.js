@@ -1,8 +1,8 @@
 import { fmtNumber, t } from "./i18n.js";
 
-const MIN_YEAR = 2003;
+const MIN_YEAR = 2001;
 const MAX_YEAR = 2026;
-const YEAR_SPAN = MAX_YEAR - MIN_YEAR; // 23 years
+const YEAR_SPAN = MAX_YEAR - MIN_YEAR; // 25 years
 
 export function createTimeSlider({
   container,
@@ -49,7 +49,7 @@ export function createTimeSlider({
     <div class="slider-interactive-zone" id="slider-interactive-zone">
       <div class="histogram-bars" id="histogram-bars" aria-hidden="true"></div>
       <div class="slider-axis-row">
-        <span class="slider-bound-year" aria-hidden="true">2003</span>
+        <span class="slider-bound-year" aria-hidden="true">${MIN_YEAR}</span>
         <div
           class="slider-track"
           id="slider-track"
@@ -105,7 +105,7 @@ export function createTimeSlider({
   // Build 24 year ticks along the line
   for (let y = MIN_YEAR; y <= MAX_YEAR; y++) {
     const tick = document.createElement("span");
-    const isMajor = y === 2003 || y === 2008 || y === 2014 || y === 2020 || y === 2026;
+    const isMajor = y % 5 === 1 || y === MAX_YEAR;
     tick.className = isMajor ? "slider-tick major" : "slider-tick";
     const pct = ((y - MIN_YEAR) / YEAR_SPAN) * 100;
     tick.style.left = `${pct}%`;
@@ -115,11 +115,19 @@ export function createTimeSlider({
   let currentYearFloat = reducedMotion ? MAX_YEAR : MIN_YEAR;
   let introRafId = null;
 
-  function stopIntro() {
+  function stopIntro({ jumpToEnd = true } = {}) {
     if (introRafId !== null) {
       cancelAnimationFrame(introRafId);
       introRafId = null;
+      if (jumpToEnd) {
+        renderSliderState(MAX_YEAR);
+        onYearChange?.(MAX_YEAR);
+      }
     }
+  }
+
+  function isIntroActive() {
+    return introRafId !== null;
   }
 
   function renderSliderState(yearFloat) {
@@ -162,7 +170,7 @@ export function createTimeSlider({
   }
 
   function updateFromPointerEvent(event, snapToInteger = false) {
-    stopIntro();
+    stopIntro({ jumpToEnd: false });
     const rect = trackEl.getBoundingClientRect();
     if (rect.width <= 0) return;
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
@@ -221,7 +229,7 @@ export function createTimeSlider({
       return;
     }
 
-    stopIntro();
+    stopIntro({ jumpToEnd: false });
     renderSliderState(nextYear);
     onYearChange?.(nextYear);
   });
@@ -233,7 +241,7 @@ export function createTimeSlider({
       return;
     }
 
-    stopIntro();
+    stopIntro({ jumpToEnd: false });
     const durationMs = 4000;
     const startTime = performance.now();
 
@@ -263,8 +271,9 @@ export function createTimeSlider({
   return {
     startIntro,
     stopIntro,
+    isIntroActive,
     setYear(yearValue) {
-      stopIntro();
+      stopIntro({ jumpToEnd: false });
       renderSliderState(yearValue);
       onYearChange?.(yearValue);
     },

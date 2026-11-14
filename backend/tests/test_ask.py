@@ -2144,3 +2144,140 @@ def test_025_pending_progress_exposure(monkeypatch):
     ask._inflight_progress.clear()
 
 
+def test_026_passage_leak_guard_and_strip():
+    # Prompts prohibit mentioning passage numbers
+    assert "passage" in ask.CURRENT_SYSTEM_PROMPT.lower()
+    assert "never refer to passages" in ask.CURRENT_SYSTEM_PROMPT.lower()
+    assert "never refer to passages" in ask.YEAR_SYSTEM_PROMPT.lower()
+
+    # English, Finnish, and Swedish reference leaks are flagged
+    assert ask.check_ask_output_guard("Matti Haapoja was born in 1845 [1]. Passage 3 also gives 1845 [3].", "en").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("According to passage 2, the treaty was signed [2].", "en").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("Kappale 3 kertoo myös syntymävuodesta [3].", "fi").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("Kappaleen 2 mukaan sopimus solmittiin 1940 [2].", "fi").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("Kappaleessa 1 mainitaan vuosi 1940 [1].", "fi").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("Avsnitt 3 anger även födelseåret 1845 [3].", "sv").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("Enligt avsnitt 2 undertecknades freden 1940 [2].", "sv").startswith("passage-leak:")
+    assert ask.check_ask_output_guard("I avsnitt 1 står att freden slöts 1940 [1].", "sv").startswith("passage-leak:")
+    # Works even when expected_lang is None
+    assert ask.check_ask_output_guard("Passage 1 states that the war ended in 1940.", None).startswith("passage-leak:")
+
+    # Non-reference track/episode numbers are not falsely flagged
+    assert ask.find_passage_leak("Albumin kappale 3 on instrumentaali.") is None
+    assert ask.find_passage_leak("Sarjan avsnitt 3 esitettiin vuonna 1995.") is None
+    assert ask.check_ask_output_guard("The treaty ended the war in 1940 [1].", "en") is None
+
+    # Clause stripping removes leaked references cleanly
+    assert (
+        ask.strip_passage_leak("Matti Haapoja was born on 16 September 1845 [1][2]. Passage 3 also gives 1845 as his birth year, in Isokyrö [3].")
+        == "Matti Haapoja was born on 16 September 1845 [1][2]."
+    )
+    assert (
+        ask.strip_passage_leak("According to passage 2, the treaty was signed on 12 March 1940 [2].")
+        == "The treaty was signed on 12 March 1940 [2]."
+    )
+    assert (
+        ask.strip_passage_leak("The war ended in March 1940 (see passage 1) [1].")
+        == "The war ended in March 1940 [1]."
+    )
+    assert (
+        ask.strip_passage_leak("Passage 1 states that the war ended in March 1940 [1].")
+        == "The war ended in March 1940 [1]."
+    )
+    assert (
+        ask.strip_passage_leak("Kappaleen 2 mukaan rauha solmittiin 1940 [2].")
+        == "Rauha solmittiin 1940 [2]."
+    )
+    assert (
+        ask.strip_passage_leak("Enligt avsnitt 2 slöts freden 1940 [2].")
+        == "Slöts freden 1940 [2]." or ask.find_passage_leak(ask.strip_passage_leak("Enligt avsnitt 2 slöts freden 1940 [2].")) is None
+    )
+
+
+def test_026_passage_leak_retry_then_strip_and_question_lang():
+    # Case 1: retry succeeds and returns question_lang
+    store = _sample_store(with_history=False)
+    ask._cache_table_ready = False
+    q = "When was Matti Haapoja born?"
+
+    client_retry_ok = _make_fake_llm_client(
+        [
+            {
+                "found": True,
+                "answer": "Matti Haapoja was born in 1845 [1]. Passage 3 also gives 1845 [3].",
+                "facts": [
+                    {
+                        "text": "German-Finnish architect",
+                        "source_sentence": "Carl Ludvig Engel var en tysk-finländsk arkitekt.",
+                        "n": 1,
+                    }
+                ],
+            },
+            {
+                "found": True,
+                "answer": "Matti Haapoja was born in 1845 [1][3].",
+                "facts": [
+                    {
+                        "text": "German-Finnish architect",
+                        "source_sentence": "Carl Ludvig Engel var en tysk-finländsk arkitekt.",
+                        "n": 1,
+                    }
+                ],
+            },
+        ]
+    )
+    payload_ok, stats_ok = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_retry_ok,
+        embed_fn=lambda texts: ([[0.1, 0.2, 0.3]], 5),
+    )
+    assert stats_ok.guard_retries == 1
+    assert payload_ok["question_lang"] == "en"
+    assert payload_ok["out_lang"] is None
+    assert "Passage" not in payload_ok["answer"]
+    assert payload_ok["answer"] == "Matti Haapoja was born in 1845 [1][3]."
+
+    # Case 2: retry still leaks -> clause is stripped automatically
+    client_still_leaks = _make_fake_llm_client(
+        [
+            {
+                "found": True,
+                "answer": "Matti Haapoja was born in 1845 [1]. Passage 3 also gives 1845 [3].",
+                "facts": [
+                    {
+                        "text": "According to passage 1, the treaty was signed in 1940.",
+                        "source_sentence": "Carl Ludvig Engel var en tysk-finländsk arkitekt.",
+                        "n": 1,
+                    }
+                ],
+            },
+            {
+                "found": True,
+                "answer": "Matti Haapoja was born in 1845 [1]. Passage 3 also gives 1845 [3].",
+                "facts": [
+                    {
+                        "text": "According to passage 1, the treaty was signed in 1940.",
+                        "source_sentence": "Carl Ludvig Engel var en tysk-finländsk arkitekt.",
+                        "n": 1,
+                    }
+                ],
+            },
+        ]
+    )
+    payload_stripped, stats_stripped = ask.build_and_cache_ask(
+        q=q,
+        force=True,
+        rag_opener=lambda: FakeConnection(store),
+        llm_client=client_still_leaks,
+        embed_fn=lambda texts: ([[0.1, 0.2, 0.3]], 5),
+    )
+    assert stats_stripped.guard_retries == 1
+    assert ask.find_passage_leak(payload_stripped["answer"]) is None
+    assert payload_stripped["answer"] == "Matti Haapoja was born in 1845 [1]."
+    assert payload_stripped["facts"][0]["text"] == "The treaty was signed in 1940."
+    assert payload_stripped["facts"][0]["source_sentence"] == "Carl Ludvig Engel var en tysk-finländsk arkitekt."
+
+
+

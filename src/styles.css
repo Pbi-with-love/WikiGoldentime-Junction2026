@@ -3196,6 +3196,16 @@ a:focus-visible,
   display: none;
 }
 
+.ask-source-langs {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--frost);
+  opacity: 0.85;
+  margin: -2px 0 8px 0;
+}
+
 .summary-fi-history-link {
   color: inherit;
   text-decoration: underline;

@@ -10,9 +10,11 @@ import {
   fmtDate,
   langName,
   mtFromLabel,
+  askBasedOnLabel,
   fallbackNoteText,
   setLang,
 } from "./i18n.js";
+import { getAskProvenance } from "./ui.js";
 
 test("STRINGS tables for fi, sv, en have identical key sets and non-empty values", () => {
   const enKeys = Object.keys(STRINGS.en).sort();
@@ -182,4 +184,88 @@ test("025 ask live-answer progress keys exist in fi, sv, en", () => {
     }
     assert.ok(STRINGS[code]["ask.readingYears"].includes("{count}"));
   }
+});
+
+test("026 ask.basedOn i18n keys and getAskProvenance label rule", () => {
+  for (const code of SUPPORTED) {
+    assert.ok(STRINGS[code]["ask.basedOn"].includes("{langs}"));
+    const line = askBasedOnLabel(["en", "en", "fi"], code);
+    assert.ok(line.length > 0);
+  }
+  assert.equal(askBasedOnLabel(["en", "en", "fi"], "en"), "Based on English, Finnish Wikipedia");
+  assert.equal(askBasedOnLabel(["fi"], "fi"), "Perustuu Wikipedia-artikkeleihin (suomi)");
+  assert.equal(askBasedOnLabel(["en", "sv", "fi"], "sv"), "Baserat på Wikipedia (engelska, svenska, finska)");
+
+  // En hero with out_lang="en" and question_lang="en" (or out_lang=null): NOT machine-translated
+  assert.deepEqual(
+    getAskProvenance(
+      {
+        pending: false,
+        out_lang: "en",
+        question_lang: "en",
+        sources: [{ lang: "en" }, { lang: "en" }, { lang: "fi" }],
+      },
+      "en"
+    ),
+    { kind: "sources", langs: ["en", "fi"] }
+  );
+  assert.deepEqual(
+    getAskProvenance(
+      {
+        pending: false,
+        out_lang: null,
+        question_lang: "en",
+        sources: [{ lang: "en" }, { lang: "en" }, { lang: "fi" }],
+      },
+      "en"
+    ),
+    { kind: "sources", langs: ["en", "fi"] }
+  );
+
+  // sv UI hero (en question translated to sv): IS machine-translated from English
+  assert.deepEqual(
+    getAskProvenance(
+      {
+        pending: false,
+        out_lang: "sv",
+        question_lang: "en",
+        sources: [{ lang: "en" }, { lang: "en" }, { lang: "fi" }],
+      },
+      "sv"
+    ),
+    { kind: "translated", fromLangs: ["en"] }
+  );
+
+  // fi question translated to en: IS machine-translated from Finnish
+  assert.deepEqual(
+    getAskProvenance(
+      {
+        pending: false,
+        out_lang: "en",
+        question_lang: "fi",
+        sources: [{ lang: "fi" }],
+      },
+      "en"
+    ),
+    { kind: "translated", fromLangs: ["fi"] }
+  );
+
+  // Fallback when out_lang differs from UI language
+  assert.deepEqual(
+    getAskProvenance(
+      {
+        pending: false,
+        out_lang: "fi",
+        question_lang: "fi",
+        sources: [{ lang: "fi" }],
+      },
+      "sv"
+    ),
+    { kind: "fallback", shownLang: "fi" }
+  );
+
+  // Pending response shows no provenance label yet
+  assert.deepEqual(getAskProvenance({ pending: true, out_lang: null, sources: [{ lang: "fi" }] }, "en"), {
+    kind: "none",
+  });
 });

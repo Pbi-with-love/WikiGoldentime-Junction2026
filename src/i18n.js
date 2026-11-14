@@ -49,6 +49,7 @@ export const STRINGS = {
     "langFrom.sv": "Swedish",
     "langFrom.en": "English",
     "mt.from": "Machine-translated from {langs}",
+    "ask.basedOn": "Based on {langs} Wikipedia",
     "fallback.note": "Not yet available in English. Showing the original ({shown}).",
     "error.network": "Couldn't reach the server. Try again.",
     "error.summaryLoad": "Couldn't load the article summary. Try again.",
@@ -315,6 +316,7 @@ export const STRINGS = {
     "langFrom.sv": "ruotsista",
     "langFrom.en": "englannista",
     "mt.from": "Konekäännös {langs}",
+    "ask.basedOn": "Perustuu Wikipedia-artikkeleihin ({langs})",
     "fallback.note": "Ei vielä saatavilla suomeksi. Näytetään alkuperäinen ({shown}).",
     "error.network": "Yhteys palvelimeen epäonnistui. Yritä uudelleen.",
     "error.summaryLoad": "Artikkelin tiivistelmää ei voitu ladata. Yritä uudelleen.",
@@ -581,6 +583,7 @@ export const STRINGS = {
     "langFrom.sv": "svenska",
     "langFrom.en": "engelska",
     "mt.from": "Maskinöversatt från {langs}",
+    "ask.basedOn": "Baserat på Wikipedia ({langs})",
     "fallback.note": "Inte tillgänglig på svenska ännu. Visar originalet ({shown}).",
     "error.network": "Kunde inte nå servern. Försök igen.",
     "error.summaryLoad": "Kunde inte ladda artikelns sammanfattning. Försök igen.",
@@ -902,6 +905,17 @@ export function mtFromLabel(sourceLangCodes, targetLang = lang) {
     return table[`langFrom.${c}`] || STRINGS.en[`langFrom.${c}`] || c;
   });
   return t("mt.from", { langs: names.join(", ") }, targetLang);
+}
+
+export function askBasedOnLabel(sourceLangCodes, targetLang = lang) {
+  const unique = [];
+  for (const code of sourceLangCodes || []) {
+    if (code && !unique.includes(code)) unique.push(code);
+  }
+  if (!unique.length) return "";
+  const table = STRINGS[targetLang] || STRINGS.en;
+  const names = unique.map((c) => table[`lang.${c}`] || langName(c, targetLang) || c);
+  return t("ask.basedOn", { langs: names.join(", ") }, targetLang);
 }
 
 export function fallbackNoteText(shownLangCode, targetLang = lang) {

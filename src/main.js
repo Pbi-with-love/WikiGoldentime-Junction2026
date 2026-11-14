@@ -39,7 +39,7 @@ async function init() {
   const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   let reducedMotion = reducedMotionQuery.matches;
 
-  let currentYear = reducedMotion ? 2026 : 2003;
+  let currentYear = reducedMotion ? 2026 : 2001;
   let activeStar = null;
   let activeArticleTab = "today";
   let activeAskState = null;
@@ -56,14 +56,24 @@ async function init() {
 
   let sceneCtrl = null;
   let sliderCtrl = null;
+  let activeLoadCount = 0;
+  let detachIntroStopListeners = null;
+
+  function stopIntroSweep(options = { jumpToEnd: true }) {
+    if (detachIntroStopListeners) {
+      detachIntroStopListeners();
+      detachIntroStopListeners = null;
+    }
+    sliderCtrl?.stopIntro(options);
+  }
 
   const ui = createUI({
     async onSearchSubmit(query, langFilter = null, options = {}) {
-      sliderCtrl?.stopIntro();
-      ui.setLoading(true);
+      stopIntroSweep({ jumpToEnd: true });
+      const endLoading = beginLoading();
       try {
         const res = await search(query, { lang: langFilter, limit: 20 });
-        ui.setLoading(false);
+        endLoading();
 
         if (options.openDirectly && res.rows.length > 0) {
           const exact =
@@ -79,14 +89,15 @@ async function init() {
           .filter(Boolean);
         sceneCtrl?.setSearchResults(matchedStars, { glide: true });
       } catch (err) {
-        ui.setLoading(false);
         ui.showError(t("error.network"));
+      } finally {
+        endLoading();
       }
     },
 
     async onAskSubmit(query) {
-      sliderCtrl?.stopIntro();
-      ui.setLoading(true);
+      stopIntroSweep({ jumpToEnd: true });
+      const endLoading = beginLoading();
       try {
         const askRes = await ask(query, uiLang);
         const topKey = `${askRes.top.lang}:${askRes.top.page_id}`;
@@ -94,7 +105,7 @@ async function init() {
         const threadsRes = await getThreads(askRes.top.lang, askRes.top.page_id);
         const threads = threadsRes?.threads || [];
 
-        ui.setLoading(false);
+        endLoading();
 
         activeAskState = {
           query,
@@ -119,14 +130,18 @@ async function init() {
           .filter(Boolean);
         sceneCtrl?.setSearchResults(sourceStars, { glide: false });
         if (topStar) {
+          // 023: a not-yet-born top article moves the slider to its creation year.
+          const bornYear = topStar.created_year ?? topStar.first_edit_year;
+          if (bornYear && bornYear > Math.round(currentYear)) sliderCtrl?.setYear(bornYear);
           sceneCtrl?.selectStar(topStar, { glide: true });
           sceneCtrl?.setThreads(topStar, threads, currentYear);
         }
 
         ui.renderAskResult(activeAskState);
       } catch (err) {
-        ui.setLoading(false);
         ui.showError(t("error.network"));
+      } finally {
+        endLoading();
       }
     },
 
@@ -143,7 +158,7 @@ async function init() {
     },
 
     async onFollowThread({ sourceLang, sourcePageId, targetLang, targetPageId }) {
-      sliderCtrl?.stopIntro();
+      stopIntroSweep({ jumpToEnd: true });
       const fromStar = starByKey.get(`${sourceLang}:${sourcePageId}`);
       const toStar = starByKey.get(`${targetLang}:${targetPageId}`);
       if (!toStar) return;
@@ -185,8 +200,8 @@ async function init() {
     },
 
     async onSelectMilestone(askRes, ms, idx) {
-      sliderCtrl?.stopIntro();
-      ui.setLoading(true);
+      stopIntroSweep({ jumpToEnd: false });
+      const endLoading = beginLoading();
       try {
         sliderCtrl?.setYear(ms.to_year);
         const topArticle = await getArticle(askRes.top.lang, askRes.top.page_id);
@@ -195,7 +210,7 @@ async function init() {
           ms.rev_id,
           topArticle.rev_id
         );
-        ui.setLoading(false);
+        endLoading();
 
         if (activeAskState) {
           activeAskState = {
@@ -214,13 +229,14 @@ async function init() {
           keepConstellation: true,
         });
       } catch (err) {
-        ui.setLoading(false);
         ui.showError(t("error.network"));
+      } finally {
+        endLoading();
       }
     },
 
     async onSelectAsOfYear(pageId, yearInt) {
-      sliderCtrl?.stopIntro();
+      stopIntroSweep({ jumpToEnd: false });
       sliderCtrl?.setYear(yearInt);
       await openStarArticle("fi", Number(pageId), {
         glide: false,
@@ -261,7 +277,7 @@ async function init() {
     },
 
     onSelectLens(lensName) {
-      sliderCtrl?.stopIntro();
+      stopIntroSweep({ jumpToEnd: true });
       sceneCtrl?.setLens(lensName);
     },
 
@@ -272,7 +288,7 @@ async function init() {
     onExitRoad() {
       roadLoadSeq++;
       articleLoadSeq++;
-      ui.setLoading(false);
+      clearLoading();
       sceneCtrl?.exitRoadMode();
       ui.closeRoadView();
     },
@@ -326,10 +342,10 @@ async function init() {
           openTab: "today",
         });
       } else if (branch.title) {
+        const endLoading = beginLoading();
         try {
-          ui.setLoading(true);
           const res = await search(branch.title, { lang: bLang, limit: 5 });
-          ui.setLoading(false);
+          endLoading();
           if (res?.rows?.length > 0) {
             const match =
               res.rows.find((r) => r.title.toLowerCase() === branch.title.toLowerCase()) ||
@@ -340,11 +356,30 @@ async function init() {
             });
           }
         } catch (err) {
-          ui.setLoading(false);
+          // best-effort branch lookup
+        } finally {
+          endLoading();
         }
       }
     },
   });
+
+  function beginLoading() {
+    activeLoadCount += 1;
+    ui.setLoading(true);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      activeLoadCount = Math.max(0, activeLoadCount - 1);
+      if (activeLoadCount === 0) ui.setLoading(false);
+    };
+  }
+
+  function clearLoading() {
+    activeLoadCount = 0;
+    ui.setLoading(false);
+  }
 
   async function enterTalvitieRoad(arg1 = {}, arg2 = null) {
     let lang = "fi";
@@ -378,7 +413,7 @@ async function init() {
       ui.closeSummaryTrail();
     }
 
-    sliderCtrl?.stopIntro();
+    stopIntroSweep({ jumpToEnd: false });
     ui.updateHoverLabel(null);
     ui.closeArticlePanel();
     activeStar = null;
@@ -387,11 +422,11 @@ async function init() {
       sceneCtrl?.setThreads(null, [], currentYear);
     }
     sliderCtrl?.setYear(2026);
-    ui.setLoading(true);
+    const endLoading = beginLoading();
     try {
       const roadData = await getTopicRoad({ lang, page_id, category });
       if (roadSeq !== roadLoadSeq) return;
-      ui.setLoading(false);
+      endLoading();
       ui.closeArticlePanel();
       ui.updateHoverLabel(null);
       sceneCtrl?.setThreads(null, [], currentYear);
@@ -399,8 +434,9 @@ async function init() {
       ui.openRoadView(roadData, sceneCtrl?.getRoadEventIndex() || 0);
     } catch (err) {
       if (roadSeq !== roadLoadSeq) return;
-      ui.setLoading(false);
       ui.showError(t("error.network"));
+    } finally {
+      endLoading();
     }
   }
 
@@ -430,10 +466,10 @@ async function init() {
     articleLoadSeq++;
     roadLoadSeq++;
     ui.closeArticlePanel();
-    sliderCtrl?.stopIntro();
+    stopIntroSweep({ jumpToEnd: false });
     sliderCtrl?.setYear(2026);
     ui.updateHoverLabel(null);
-    ui.setLoading(true);
+    const endLoading = beginLoading();
 
     let summaryOpened = false;
     let pendingCompare = null;
@@ -456,7 +492,7 @@ async function init() {
     try {
       const summaryData = await getSummary(lang, page_id, uiLang);
       if (seq !== summaryLoadSeq) return;
-      ui.setLoading(false);
+      endLoading();
       ui.closeArticlePanel();
       sceneCtrl?.setThreads(null, [], currentYear);
       const trailItems = ui.openSummaryTrail(summaryData);
@@ -484,14 +520,15 @@ async function init() {
       }
     } catch (err) {
       if (seq !== summaryLoadSeq) return;
-      ui.setLoading(false);
       ui.showError(t("error.summaryLoad"));
+    } finally {
+      endLoading();
     }
   }
 
   function exitSummaryTrail() {
     summaryLoadSeq++;
-    ui.setLoading(false);
+    clearLoading();
     ui.closeArticlePanel();
     ui.closeSummaryTrail();
     sceneCtrl?.exitSummaryTrail({ restoreStarSelection: true });
@@ -506,7 +543,7 @@ async function init() {
     const inRoad = Boolean(sceneCtrl?.isRoadMode());
     const inSummary = Boolean(sceneCtrl?.isSummaryTrailMode());
 
-    sliderCtrl?.stopIntro();
+    stopIntroSweep({ jumpToEnd: !options.asofYear });
     activeStar = star;
     if (options.openTab) {
       activeArticleTab = options.openTab;
@@ -522,12 +559,10 @@ async function init() {
         constellationPath = [star];
       }
 
-      if (
-        star.first_edit_year &&
-        star.first_edit_year > Math.round(currentYear) &&
-        !options.asofYear
-      ) {
-        sliderCtrl?.setYear(star.first_edit_year);
+      // Decision (023): a not-yet-born star auto-jumps the slider to its creation year.
+      const bornYear = star.created_year ?? star.first_edit_year;
+      if (bornYear && bornYear > Math.round(currentYear) && !options.asofYear) {
+        sliderCtrl?.setYear(bornYear);
       }
 
       if (options.glide !== false) {
@@ -537,7 +572,7 @@ async function init() {
       }
     }
 
-    ui.setLoading(true);
+    const endLoading = beginLoading();
     try {
       const targetYear = Math.round(options.asofYear ?? currentYear);
       const [article, threadsRes] = await Promise.all([
@@ -585,7 +620,7 @@ async function init() {
         }
       }
 
-      ui.setLoading(false);
+      endLoading();
       ui.openArticlePanel({
         article,
         timeline,
@@ -597,13 +632,14 @@ async function init() {
       });
     } catch (err) {
       if (articleSeq !== articleLoadSeq) return;
-      ui.setLoading(false);
       ui.showError(t("error.network"));
+    } finally {
+      endLoading();
     }
   }
 
   // Load initial stars + global timeline
-  ui.setLoading(true);
+  const endInitLoading = beginLoading();
   try {
     const [loadedStars, loadedTimeline] = await Promise.all([
       getStars(),
@@ -614,10 +650,10 @@ async function init() {
     for (const s of stars) {
       starByKey.set(`${s.lang}:${s.page_id}`, s);
     }
-    ui.setLoading(false);
   } catch (err) {
-    ui.setLoading(false);
     ui.showError(t("error.network"));
+  } finally {
+    endInitLoading();
   }
 
   const canvas = document.getElementById("galaxy-canvas");
@@ -702,7 +738,7 @@ async function init() {
       if (star) restored.push(star);
     }
     if (restored.length >= 2) {
-      sliderCtrl.stopIntro();
+      stopIntroSweep({ jumpToEnd: false });
       sliderCtrl.setYear(2026);
       constellationPath = restored;
       savedConstellationHash = hash;
@@ -719,9 +755,45 @@ async function init() {
     return false;
   }
 
+  function attachIntroInteractionStop() {
+    if (!sliderCtrl?.isIntroActive()) return;
+    const onPointerDown = (event) => {
+      if (event.target?.closest?.("#timeslider-root")) {
+        if (detachIntroStopListeners) {
+          detachIntroStopListeners();
+          detachIntroStopListeners = null;
+        }
+        return;
+      }
+      stopIntroSweep({ jumpToEnd: true });
+    };
+    const onKeyDown = (event) => {
+      if (event.target?.closest?.("#timeslider-root")) {
+        if (detachIntroStopListeners) {
+          detachIntroStopListeners();
+          detachIntroStopListeners = null;
+        }
+        return;
+      }
+      stopIntroSweep({ jumpToEnd: true });
+    };
+    const onWheel = () => {
+      stopIntroSweep({ jumpToEnd: true });
+    };
+    window.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
+    window.addEventListener("keydown", onKeyDown, { capture: true, passive: true });
+    window.addEventListener("wheel", onWheel, { capture: true, passive: true });
+    detachIntroStopListeners = () => {
+      window.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("wheel", onWheel, { capture: true });
+    };
+  }
+
   const restoredFromHash = await restoreConstellationFromHash();
   if (!restoredFromHash && stars.length > 0) {
     sliderCtrl.startIntro();
+    attachIntroInteractionStop();
   }
 
   // Expose debug handle for automated verification
