@@ -1339,6 +1339,7 @@ export function createUI({
       activePostHeading: null,
       activeGhost: null,
       visitedIndices,
+      cardLang: {}, // spec 035: per-station card language choice (station index -> fi|sv|en)
     };
 
     skyTopBar.hidden = true;
@@ -1417,10 +1418,11 @@ export function createUI({
     return dots.join("");
   }
 
-  function renderLaneCoverageHtml(lanes, stationLang = "fi") {
+  // pill = { langs: [fi|sv|en...], shown } -> one toggle button per language instead of static dots.
+  function renderLaneCoverageHtml(lanes, stationLang = "fi", pill = null) {
     const laneObj = normalizeLanes(lanes, stationLang);
     const present = ["fi", "sv", "en"].filter((c) => (c === "fi" ? laneObj.fi : laneObj[c] > 0));
-    const others = present.filter((c) => c !== stationLang);
+    const others = present.filter((c) => c !== (pill ? pill.shown : stationLang));
     let labelText;
     if (others.length > 0) {
       labelText = t("road.alsoCoveredIn", { langs: others.map((c) => langName(c)).join(", ") });
@@ -1429,8 +1431,18 @@ export function createUI({
     } else {
       labelText = t("road.finnishOnly");
     }
+    const pillsHtml = pill
+      ? `<span class="lane-pills" role="group" aria-label="${escapeHtml(t("road.cardLanguage"))}">${pill.langs
+          .map((c) => {
+            const label = t("road.showCardIn", { lang: langName(c) });
+            return `<button type="button" class="lane-pill" data-card-lang="${c}" aria-pressed="${
+              c === pill.shown ? "true" : "false"
+            }" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="dot dot-${c}" aria-hidden="true"></span>${c.toUpperCase()}</button>`;
+          })
+          .join("")}</span>`
+      : `<span class="lane-dots-group" aria-hidden="true">${renderLaneDotsHtml(laneObj, stationLang)}</span>`;
     return `
-      <span class="lane-dots-group" aria-hidden="true">${renderLaneDotsHtml(laneObj, stationLang)}</span>
+      ${pillsHtml}
       <span class="lane-coverage-text">${escapeHtml(labelText)}</span>
     `;
   }
@@ -1567,6 +1579,26 @@ export function createUI({
     const st = stations[activeIndex];
     const idx = activeIndex;
 
+    // Spec 035: card language (topic road only). Native sibling lead per language; never show fi text under a non-fi title.
+    const stLang = st.lang || roadData.article?.lang || "fi";
+    const laneObj = normalizeLanes(st.lanes, stLang);
+    const pillLangs = isTopicRoad
+      ? ["fi", "sv", "en"].filter(
+          (c) => (c === "fi" ? laneObj.fi : laneObj[c] > 0) && (c === stLang || st.siblings?.[c])
+        )
+      : [];
+    const chosenLang = activeRoadState.cardLang?.[idx];
+    const shownLang = pillLangs.includes(chosenLang)
+      ? chosenLang
+      : pillLangs.includes(uiLang)
+      ? uiLang
+      : stLang;
+    const sib = shownLang !== stLang ? st.siblings?.[shownLang] : null;
+    const cardTitle = sib ? sib.title || st.heading : st.heading;
+    const cardSummary = sib ? sib.summary_short || "" : st.summary;
+    const cardText = sib ? sib.summary_long || sib.summary_short || "" : st.text;
+    const cardPageId = sib ? sib.page_id : st.page_id;
+
     // Row 2: Memory Badge
     let memoryBadgeHtml = "";
     if (st.history && st.history.added_year) {
@@ -1587,8 +1619,13 @@ export function createUI({
             })}`
           )}</span>`
         : "";
+      const fiLabelHtml =
+        isTopicRoad && shownLang !== "fi"
+          ? `<span class="road-memory-source">${escapeHtml(t("summary.fiHistoryLabel"))}</span>`
+          : "";
       memoryBadgeHtml = `
         <div class="road-memory-badge">
+          ${fiLabelHtml}
           ${warDot}
           <span class="road-memory-primary">${escapeHtml(
             t(badgeKey, { year: st.history.added_year, count: fmtNumber(changesCount) })
@@ -1611,7 +1648,7 @@ export function createUI({
       isTopicRoad && st.thumb_url
         ? `
           <figure class="road-event-thumb-row">
-            <img class="road-event-thumb-img" src="${escapeHtml(st.thumb_url)}" alt="${escapeHtml(st.heading)}" />
+            <img class="road-event-thumb-img" src="${escapeHtml(st.thumb_url)}" alt="${escapeHtml(cardTitle)}" />
             ${
               st.image || thumbCaptionFallback
                 ? `<figcaption class="road-event-thumb-caption" id="road-event-thumb-caption">${thumbCaptionFallback}</figcaption>`
@@ -1685,15 +1722,13 @@ export function createUI({
         `
         : "";
 
-    const stLang = st.lang || roadData.article?.lang || "fi";
-
     // Row 6: Expanded Original Section Markdown (or detailed milestone summary in Topic Road)
     const expandedReaderHtml = expandedSection
       ? `
-        <div class="road-section-reader" id="road-section-reader" lang="${escapeHtml(stLang)}" tabindex="0" aria-label="${
+        <div class="road-section-reader" id="road-section-reader" lang="${escapeHtml(shownLang)}" tabindex="0" aria-label="${
           isTopicRoad ? "Milestone context" : "Original section text"
         }">
-          ${renderStationMarkdownHtml(st.text, st.heading, activePostHeading, posts)}
+          ${renderStationMarkdownHtml(cardText, cardTitle, activePostHeading, posts)}
         </div>
       `
       : "";
@@ -1755,24 +1790,28 @@ export function createUI({
           })
         )}`;
 
-    const canOpenArticle = isTopicRoad ? Boolean(st.page_id) : Boolean(roadData.article?.page_id);
+    const canOpenArticle = isTopicRoad ? Boolean(cardPageId) : Boolean(roadData.article?.page_id);
 
     const whyHtml = isTopicRoad ? renderRoadWhyHtml(st.why) : "";
     const summaryHtml =
-      st.summary && String(st.summary).trim()
-        ? `<p class="road-card-summary" lang="${escapeHtml(stLang)}">${escapeHtml(st.summary)}</p>`
+      cardSummary && String(cardSummary).trim()
+        ? `<p class="road-card-summary" lang="${escapeHtml(shownLang)}">${escapeHtml(cardSummary)}</p>`
         : "";
 
     const nearestCardHtml = `
       <article class="road-card is-nearest" data-road-idx="${idx}">
         <div class="road-card-top-meta">
           <span class="road-card-meta-left">${metaLeftText}</span>
-          <div class="road-card-lanes">${renderLaneCoverageHtml(st.lanes, stLang)}</div>
+          <div class="road-card-lanes">${renderLaneCoverageHtml(
+            st.lanes,
+            stLang,
+            pillLangs.length > 1 ? { langs: pillLangs, shown: shownLang } : null
+          )}</div>
         </div>
 
         <div class="road-card-header-row">
           <div class="road-card-title-block">
-            <h2 class="road-card-title" lang="${escapeHtml(stLang)}">${escapeHtml(st.heading)}</h2>
+            <h2 class="road-card-title" lang="${escapeHtml(shownLang)}">${escapeHtml(cardTitle)}</h2>
             ${whyHtml}
           </div>
           ${memoryBadgeHtml}
@@ -1915,6 +1954,15 @@ export function createUI({
       }
     });
 
+    roadCardsStage.querySelectorAll(".lane-pill").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const lg = btn.dataset.cardLang;
+        activeRoadState.cardLang[idx] = lg;
+        renderRoadCards();
+        roadCardsStage.querySelector(`.lane-pill[data-card-lang="${lg}"]`)?.focus();
+      });
+    });
+
     // Wire "Read this section" / "Hide section text"
     roadCardsStage.querySelector("#btn-road-toggle-section")?.addEventListener("click", () => {
       activeRoadState.expandedSection = !activeRoadState.expandedSection;
@@ -1927,8 +1975,8 @@ export function createUI({
     // Wire "Open full article" / milestone article
     roadCardsStage.querySelector("#btn-road-read-full")?.addEventListener("click", () => {
       if (isTopicRoad) {
-        if (st?.page_id) {
-          onSelectStarByKey?.(st.lang || "fi", st.page_id, { glide: false, openTab: "today" });
+        if (cardPageId) {
+          onSelectStarByKey?.(shownLang, cardPageId, { glide: false, openTab: "today" });
         }
       } else {
         const art = roadData.article;

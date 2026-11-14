@@ -225,6 +225,8 @@ export const STRINGS = {
     "road.returnToSection": "Return to section {no}",
     "road.alsoCoveredIn": "Also covered in: {langs}",
     "road.finnishOnly": "Finnish only",
+    "road.showCardIn": "Show in {lang}",
+    "road.cardLanguage": "Card language",
     "road.editWarIn": "Edit war in {years}",
     "road.addedChangedTimes": {
       one: "Added {year} · changed {count} time",
@@ -492,6 +494,8 @@ export const STRINGS = {
     "road.returnToSection": "Takaisin osioon {no}",
     "road.alsoCoveredIn": "Käsitelty myös kielillä: {langs}",
     "road.finnishOnly": "Vain suomeksi",
+    "road.showCardIn": "Näytä kielellä: {lang}",
+    "road.cardLanguage": "Kortin kieli",
     "road.editWarIn": "Muokkaussota vuosina {years}",
     "road.addedChangedTimes": {
       one: "Lisätty {year} · muokattu {count} kerran",
@@ -759,6 +763,8 @@ export const STRINGS = {
     "road.returnToSection": "Tillbaka till avsnitt {no}",
     "road.alsoCoveredIn": "Behandlas även på: {langs}",
     "road.finnishOnly": "Endast på finska",
+    "road.showCardIn": "Visa på {lang}",
+    "road.cardLanguage": "Kortets språk",
     "road.editWarIn": "Redigeringskrig {years}",
     "road.addedChangedTimes": {
       one: "Tillagd {year} · ändrad {count} gång",

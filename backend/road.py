@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from backend import neighbours, rag_common
+from backend import compare, neighbours, rag_common
 
 VALID_LANGS = neighbours.LANGS
 _HEADING_SPLIT_RE = re.compile(r"(?m)^##(?:\s|$)")
@@ -155,6 +155,34 @@ def _apply_lead_years(cur, items: list[dict[str, Any]]) -> None:
         it["event_year"] = extract_lead_year(leads.get((it["lang"], it["page_id"]), ""))
 
 
+def _attach_sibling_leads(cur, items: list[dict[str, Any]]) -> None:
+    """Add summary_short/summary_long to every non-null sibling (own language copies the event lead; one PK query)."""
+    others = [
+        (lg, s["page_id"])
+        for it in items
+        for lg, s in it["siblings"].items()
+        if s and lg != it["lang"]
+    ]
+    rows: dict[tuple[str, int], str] = {}
+    if others:
+        clause = " OR ".join(["(lang = ? AND page_id = ?)"] * len(others))
+        cur.execute(
+            f"SELECT lang, page_id, LEFT(text, 4000) FROM article WHERE {clause}",
+            tuple(v for p in others for v in p),
+        )
+        rows = {(lg, int(pid)): txt for lg, pid, txt in cur.fetchall()}
+    for it in items:
+        for lg, s in it["siblings"].items():
+            if not s:
+                continue
+            if lg == it["lang"]:
+                s["summary_short"], s["summary_long"] = it["summary_short"], it["summary_long"]
+                continue
+            lead = neighbours.lead_text(rows.get((lg, int(s["page_id"])), ""))
+            s["summary_short"] = compare.format_passage(lead, 240)
+            s["summary_long"] = compare.format_passage(lead, 600)
+
+
 def _fetch_seed_and_related_cats(
     cur, lang: str, page_id: int, seed_wd: str | None
 ) -> tuple[set[str], set[str]]:
@@ -266,6 +294,7 @@ def _category_road(cur, category: str) -> dict[str, Any]:
 
     items = neighbours.item_meta(cur, groups, prefer_lang="fi")
     _apply_lead_years(cur, items)
+    _attach_sibling_leads(cur, items)
     ordered = sort_road_items(items, seed_key=None)
     return {
         "topic": {"title": category, "lang": "fi", "page_id": None, "category": category},
@@ -299,6 +328,7 @@ def _article_road(cur, lang: str, page_id: int) -> dict[str, Any]:
     }
     items = neighbours.item_meta(cur, [seed_group, *chosen], prefer_lang=lang)
     _apply_lead_years(cur, items)
+    _attach_sibling_leads(cur, items)
     seed_item = next((it for it in items if it["key"] == seed_key), items[0])
     ordered = sort_road_items(items, seed_key=seed_key)
     return {
