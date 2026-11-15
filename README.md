@@ -20,11 +20,11 @@ Built for the MariaDB challenge *Wikipedia Through Time* at Junction 2026, on bo
 | **Search.** Ask in any language, matching stars light up and the camera flies there. Chips show the same topic in the other languages. | Question embedded with bge-m3, nearest chunks, then joined to the article. | `VECTOR INDEX` (M=16, cosine), `VEC_DISTANCE_COSINE` over 83,797 chunks |
 | **Ask, with history.** A short answer from the retrieved passages, every fact with its source sentence. "This answer changed N times": one card per period, with the editor and `oldid` of the edit that changed it. | Current vectors find the articles; each period is rebuilt from the old text. A milestone needs a change in the numbers of the cited sentences, not LLM rewording. | `FOR SYSTEM_TIME AS OF`; vector search and history in one SQL statement (`SINGLE_STMT_HISTORY_SQL`, `backend/ask.py`) |
 | **Through time.** Read any article as it stood on any date; versions, reverts, disputes and edit-war months per article; word diff against today. | Real Wikipedia edit times are the row validity times. | `FOR SYSTEM_TIME AS OF` / `ALL`, `system_versioning_insert_history` |
-| **Time slider, 2001–2026.** Stars are born in the year their article was created; bars show edits per month; edit-war months turn red. | Read from precomputed tables. | `history_stats`, `month_stats`, `global_month_stats` |
+| **Time slider, 2001–2026.** Stars are born in the year their article was created, in every lens (Meaning, History, Geography); bars show edits per month; a star turns red only in years with a real edit-war month (537 Finnish articles, e.g. 44 in 2014). | Read from precomputed tables; `war_years` per star from months with ≥ 3 disputes. | `history_stats`, `month_stats`, `global_month_stats` |
 | **Summarize.** One 3D card per section, each fact with its source sentence. Faded cards are sections deleted in the past. | Section history and "ghost" sections are built once from yearly snapshots. | `section_history` (19,285 rows, no LLM, read in < 1 ms) |
 | **Cross-language compare.** For each Finnish section, the closest Swedish and English passage ("Also in English Wikipedia" / "Only in Finnish Wikipedia"). | Cosine distance between the chunks of articles with the same `wikidata_id`; match if distance ≤ 0.45. | `VEC_DISTANCE_COSINE` |
-| **Memory threads and topic road.** Related articles by vector similarity and shared categories, 13 stations for *Talvisota* (1808–1944), each with similarity, history stats and image credit. | Neighbour search on `article_vector`, filtered by shared category. | `VECTOR INDEX`, category tables |
-| **Geography.** Map of Finland, 7,186 stars placed by Wikidata coordinates. | `article_geo` from Wikidata P625 / P276. | plain tables |
+| **Memory threads and topic road (Talvitie).** From any article ("See as a road"): the 40 nearest articles by vector, filtered by shared Finnish categories to 12 + the article itself, ordered by the first year in each lead (13 stations for *Talvisota*, 1808–1944). Each card shows similarity, history stats and image credit, and can be switched between FI / SV / EN when the topic exists in that Wikipedia (native lead, no translation). | Neighbour search on `article_vector`, category tiers, sibling articles by `wikidata_id`. | `VECTOR INDEX`, category tables |
+| **Geography.** Map of Finland, 7,186 stars placed by Wikidata coordinates; the map reframes beside an open answer/search panel and fits phone screens. | `article_geo` from Wikidata P625 / P276. | plain tables |
 | **LLM answers cached in MariaDB.** Summaries and answers are generated once; a cache hit takes 2–7 ms. | `summary_cache`, `answer_cache`. The demo never waits for the model. | tables with a `source_hash` per language row |
 
 Every LLM output comes only from the text it was given. Each fact carries the sentence it came from, the output is JSON with a fixed schema. New answers and translations use `deepseek-4-1-flash` on Verda inference (OpenAI-compatible API); answers cached before 2026-11-15 were written by Anthropic `claude-haiku-5-5`.
@@ -141,13 +141,13 @@ The deployed instance runs on an Ubuntu 24.04 VPS (2 vCPU, 8 GB RAM, no GPU). Lo
 ## Test
 
 ```bash
-npm test                                   # contract test on the mock + i18n + summary mapping (35 pass at last run)
+npm test                                   # contract test on the mock + i18n + summary mapping (35 pass)
 REAL=ask API_BASE=http://127.0.0.1:8002 npm test    # contract test against the real endpoint(s)
 python -m pytest backend/test_api.py backend/tests -q   # backend; unit tests are offline, API tests need the databases
-BASE_URL=http://127.0.0.1:18322 npm run e2e             # Playwright, 13 flows
+BASE_URL=https://wikimemory.tech npm run e2e            # Playwright, 13 flows, against the live site
 ```
 
-`npm run e2e` tests the **deployed** build, not `vite dev`. `BASE_URL` defaults to `http://127.0.0.1:18322`, so open an SSH tunnel to the server first:
+`npm run e2e` tests a **built** app, not `vite dev`: the live site, a local `npm run preview`, or the server through an SSH tunnel (`BASE_URL` defaults to `http://127.0.0.1:18322`):
 
 ```bash
 ssh -N -L 18322:127.0.0.1:8002 <user>@<server>
@@ -155,7 +155,7 @@ ssh -N -L 18322:127.0.0.1:8002 <user>@<server>
 
 If the target is not reachable, the test setup stops and prints the tunnel command. The e2e flows cover the sky and search, through time, Ask, Summarize and road, language switch and geography.
 
-Last recorded numbers (see `docs/memory/STATUS.md`): npm test 35/35, VPS pytest 89 passed / 1 skipped at spec 029, e2e 13/13 on the build before the last fixes; dry run 4 on the deployed build had 0 console errors and 0 failed requests. The last bug fix (spec 033) passed 12 of 13 flows on the deployed build; the failing one was the 390 px geography view, which lost the Turku label; its fix was still pending when this was written.
+Last recorded numbers (see `docs/memory/STATUS.md`): npm test 35/35, VPS pytest 99 passed / 1 skipped, e2e 13/13 against https://wikimemory.tech (bundle `index-k1R9Inu9.js`, 2026-11-15). Dry run 4 on the deployed build had 0 console errors and 0 failed requests.
 
 The demo script and its dry runs are in `docs/DEMO.md` and `docs/memory/research/`.
 
@@ -166,7 +166,8 @@ The demo script and its dry runs are in `docs/DEMO.md` and `docs/memory/research
 - **Compare recall is 0.782** (precision 0.984, 130 hand-labelled pairs, threshold 0.45): about 1 in 5 real matches is missed.
 - **Change detection uses numbers only.** Edits that change only names or wording are missed, so an Ask answer can show fewer periods than there were edits.
 - **Cold cache.** The first click on *As of*, the diff card or a new question can take 1–3 s (a brand-new, uncached question about 25 s). Warm calls are 100–300 ms.
-- **Map labels on very narrow screens.** Geography is readable at 390 px, but some city labels can still collide with the legend there.
+- **LLM rate limit.** Verda allows 60 requests per minute and a new question needs about 37 calls, so the whole site builds only 1–2 new questions per minute; more wait and retry. Cached questions and summaries are not affected.
+- **Road years** are the first year written in each article's lead, not a verified event date (a biography can show the birth year), and stations are related by meaning, not a curated chain of causes.
 - History exists only for Finnish. Swedish and English summaries show the Finnish history.
 - Some demo questions retrieve the wrong top article (32, 34, 39 in `data/demo-questions.tsv`).
 - Short articles (under 1,500 words or fewer than 4 sections) get an overview without section cards.
