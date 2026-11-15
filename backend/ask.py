@@ -2074,8 +2074,8 @@ def _background_ask_worker(
     embed_fn: Callable[[list[str]], tuple[list[list[float]], int]] | None = None,
 ) -> None:
     try:
-        if llm_client is None and not os.environ.get("ANTHROPIC_API_KEY"):
-            logger.warning("ANTHROPIC_API_KEY unset; skipping background ask build for q_hash=%s", q_hash[:12])
+        if llm_client is None and not summary.llm_configured():
+            logger.warning("LLM not configured; skipping background ask build for q_hash=%s", q_hash[:12])
             return
         build_and_cache_ask(
             q=q,

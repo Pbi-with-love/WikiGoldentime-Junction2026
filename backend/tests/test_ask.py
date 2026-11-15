@@ -757,6 +757,7 @@ def test_endpoint_validation_pending_single_flight_and_cache_hit(monkeypatch):
     scheduled: list[tuple[Any, tuple[Any, ...]]] = []
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    monkeypatch.setenv("VERDA_API_KEY", "test-dummy-key")
     monkeypatch.setattr(ask.summary, "_open_rag", lambda: FakeConnection(global_store))
     monkeypatch.setattr(ask.summary, "_default_anthropic_client", lambda: client)
     monkeypatch.setattr(ask.rag_common, "embed", lambda texts, truncate=True: fake_embed(texts))

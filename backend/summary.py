@@ -23,6 +23,7 @@ import mariadb
 os.environ.setdefault("DB_PORT", "3307")
 
 from backend import history, rag_common, svt_common  # noqa: E402
+from backend.llm import llm_configured  # noqa: E402
 
 if svt_common.DB["port"] == 3308 and os.environ.get("DB_PORT") != "3308":
     svt_common.DB["port"] = int(os.environ.get("SVT_DB_PORT", 3307))
@@ -1199,7 +1200,7 @@ def _call_llm_json(
     try:
         resp = client.messages.create(**create_kwargs)
     except Exception as exc:
-        status = getattr(exc, "status_code", None)
+        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
         logger.warning("Anthropic call failed (%s status=%s)", type(exc).__name__, status)
         return None, 0, 0
 
@@ -1225,7 +1226,10 @@ def _call_llm_json(
         return None, in_tok, out_tok
 
     try:
-        parsed = json.loads(first_text)
+        t = first_text.strip()
+        if t.startswith("```"):  # tolerate ```json fences
+            t = t.split("\n", 1)[-1].rsplit("```", 1)[0]
+        parsed = json.loads(t)
     except Exception as exc:
         logger.warning("Anthropic response was not valid JSON (%s)", type(exc).__name__)
         return None, in_tok, out_tok
@@ -1238,9 +1242,14 @@ def _call_llm_json(
 
 
 def _default_anthropic_client() -> Any:
-    import anthropic
+    """LLM client: Verda unless LLM_PROVIDER=anthropic (fallback)."""
+    if os.environ.get("LLM_PROVIDER") == "anthropic":
+        import anthropic
 
-    return anthropic.Anthropic()
+        return anthropic.Anthropic()
+    from backend.llm import VerdaClient
+
+    return VerdaClient()
 
 
 def build_summary_payload(
@@ -1872,9 +1881,9 @@ def build_and_cache_llm_summary(
 def _background_llm_worker(key: tuple[str, int, int, str], llm_client: Any = None) -> None:
     lang, page_id, rev_id, cache_ui = key
     try:
-        if llm_client is None and not os.environ.get("ANTHROPIC_API_KEY"):
+        if llm_client is None and not llm_configured():
             logger.warning(
-                "ANTHROPIC_API_KEY unset; skipping background summary for %s:%s ui=%s",
+                "LLM not configured; skipping background summary for %s:%s ui=%s",
                 lang,
                 page_id,
                 cache_ui,
