@@ -368,31 +368,6 @@ const FINLAND_BORDER_LATLON = [
   [59.82, 22.96], // Back to Hanko
 ];
 
-export const SKY_CLUSTER_ROADS = [
-  {
-    id: "talvisota",
-    label: "Talvisota",
-    sublabel: t("scene.talvitieSublabel"),
-    pos: [13.5, 18.8, 11.4],
-    query: { lang: "fi", page_id: 1256, mode: "topic" },
-  },
-  {
-    id: "sisallissota",
-    idPage: 1150,
-    label: "Suomen sisällissota",
-    sublabel: t("scene.talvitieSublabel"),
-    pos: [-9.4, 18.4, 8.6],
-    query: { lang: "fi", page_id: 1150, mode: "topic" },
-  },
-  {
-    id: "autonomia",
-    label: "Suomen suuriruhtinaskunta",
-    sublabel: t("scene.talvitieSublabel"),
-    pos: [-22.0, -3.2, 16.0],
-    query: { category: "Suomen suuriruhtinaskunta", mode: "topic" },
-  },
-];
-
 export function createGalaxyScene({
   canvas,
   stars,
@@ -2776,7 +2751,6 @@ export function createGalaxyScene({
       onFrameLabelsUpdate({
         starLabels: [],
         threadLabels: [],
-        clusterLabels: [],
         lensGuideLabels: [],
         roadYearLabels,
         roadGhostLabels,
@@ -2865,30 +2839,6 @@ export function createGalaxyScene({
       }
     }
 
-    // Project clickable cluster road labels in "meaning" lens when no search/selection is active
-    const clusterLabels = [];
-    if (
-      currentLens === "meaning" &&
-      !selectedStar &&
-      searchStars.length === 0 &&
-      activeThreads.length === 0
-    ) {
-      for (const cl of SKY_CLUSTER_ROADS) {
-        projVec.set(cl.pos[0], cl.pos[1], cl.pos[2]).project(camera);
-        if (projVec.z >= -1 && projVec.z <= 1) {
-          const x = (projVec.x + 1) * 0.5 * width;
-          const y = (-projVec.y + 1) * 0.5 * height;
-          if (x > 80 && x < width - 220 && y > 130 && y < height - 180) {
-            clusterLabels.push({
-              ...cl,
-              x,
-              y,
-            });
-          }
-        }
-      }
-    }
-
     // Project lens guide labels when in "history" or "geography" lens
     const lensGuideLabels = [];
     if (currentLens === "history" || currentLens === "geography") {
@@ -2939,7 +2889,6 @@ export function createGalaxyScene({
     onFrameLabelsUpdate({
       starLabels,
       threadLabels,
-      clusterLabels,
       lensGuideLabels,
       roadYearLabels: [],
       roadGhostLabels: [],

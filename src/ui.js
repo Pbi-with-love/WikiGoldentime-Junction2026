@@ -1066,7 +1066,6 @@ export function createUI({
   // 3D Projected Labels (Search results + active threads + sky cluster roads + lens guides + Talvitie road numerals/gaps/branches/ghosts)
   let projectedMap = new Map();
   let projectedReasonMap = new Map();
-  let projectedClusterMap = new Map();
   let projectedGuideMap = new Map();
   let projectedRoadYearMap = new Map();
   let projectedRoadGapMap = new Map();
@@ -1097,7 +1096,6 @@ export function createUI({
     {
       starLabels = [],
       threadLabels = [],
-      clusterLabels = [],
       lensGuideLabels = [],
       roadYearLabels = [],
       roadGapLabels = [],
@@ -1151,30 +1149,6 @@ export function createUI({
           pill.textContent = item.thread.reason;
         }
         pill.style.transform = `translate3d(${Math.round(item.x)}px, ${Math.round(item.y)}px, 0)`;
-      }
-    );
-
-    // 3. Sky cluster road labels (click to enter Talvitie mode!)
-    syncPool(
-      projectedClusterMap,
-      clusterLabels,
-      (item) => item.id,
-      (item) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "projected-cluster-road-btn";
-        btn.addEventListener("click", () => {
-          onEnterRoad?.(item.query);
-        });
-        return btn;
-      },
-      (btn, item) => {
-        const html = `<span class="cluster-road-title">${escapeHtml(item.label)}</span><span class="cluster-road-sub">${escapeHtml(item.sublabel)}</span>`;
-        if (btn.dataset.renderedHtml !== html) {
-          btn.innerHTML = html;
-          btn.dataset.renderedHtml = html;
-        }
-        btn.style.transform = `translate3d(${Math.round(item.x)}px, ${Math.round(item.y)}px, 0)`;
       }
     );
 
