@@ -48,7 +48,6 @@ const VERTEX_SHADER = /* glsl */ `
   uniform float uMorphT;
   uniform float uRoadModeMix;
   uniform float uSummaryModeMix;
-  uniform float uIgnoreYearSlider;
   uniform vec3 uLingonColor;
 
   attribute vec3 aPosTo;
@@ -84,7 +83,7 @@ const VERTEX_SHADER = /* glsl */ `
     // Every star is born in its article creation year (spec 023); history stars keep the flare + larger size.
     float birth = firstEditYear - 0.80 + aSubYear * 0.78;
     float yearVis = smoothstep(birth - 0.28, birth + 0.02, uYear);
-    float born = mix(yearVis, 1.0, uIgnoreYearSlider);
+    float born = yearVis;
 
     if (born <= 0.001 && aHighlight < 0.5 && aRoadMember < 0.5) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -97,7 +96,7 @@ const VERTEX_SHADER = /* glsl */ `
       vis = born;
       pointSize = max(pointSize * 1.95, 6.2 * uPixelRatio);
 
-      if (uReducedMotion < 0.5 && uIgnoreYearSlider < 0.5) {
+      if (uReducedMotion < 0.5) {
         float age = uYear - birth;
         float flare = (1.0 - smoothstep(0.0, 0.65, age)) * step(0.0, age);
         pointSize *= (1.0 + flare * 0.85);
@@ -576,7 +575,6 @@ export function createGalaxyScene({
       uMorphT: { value: 0.0 },
       uRoadModeMix: { value: 0.0 },
       uSummaryModeMix: { value: 0.0 },
-      uIgnoreYearSlider: { value: 0.0 },
       uLingonColor: { value: new THREE.Vector3(...LINGON_RGB) },
     },
     vertexShader: VERTEX_SHADER,
@@ -1312,7 +1310,6 @@ export function createGalaxyScene({
 
     historyGuideGroup.visible = lensName === "history";
     geographyGuideGroup.visible = lensName === "geography";
-    material.uniforms.uIgnoreYearSlider.value = lensName === "meaning" ? 0.0 : 1.0;
 
     // Clear 3D threads on lens switch or rebuild them in the new lens coordinates
     clearGroup(threadsGroup);
@@ -2186,7 +2183,6 @@ export function createGalaxyScene({
     constellationGroup.visible = true;
     historyGuideGroup.visible = currentLens === "history";
     geographyGuideGroup.visible = currentLens === "geography";
-    material.uniforms.uIgnoreYearSlider.value = currentLens === "meaning" ? 0.0 : 1.0;
 
     controls.enableRotate = true;
     controls.enablePan = true;
