@@ -1,5 +1,7 @@
 # wikimemory
 
+**Live demo: https://wikimemory.tech**
+
 **Ask Wikipedia a question, then see how its answer changed over the years.**
 
 wikimemory is a 3D galaxy of 29,460 Finnish-history Wikipedia articles (Finnish, Swedish, English). Every star is an article, placed by meaning. Ask a question and you get an answer with cited source sentences. Below it you see how Wikipedia's answer to that question changed, edit by edit, with the revision and the editor behind each change. Vectors find the passage; system versioning shows its past; MariaDB stores all of it, including every LLM answer.
@@ -25,7 +27,7 @@ Built for the MariaDB challenge *Wikipedia Through Time* at Junction 2026, on bo
 | **Geography.** Map of Finland, 7,186 stars placed by Wikidata coordinates. | `article_geo` from Wikidata P625 / P276. | plain tables |
 | **LLM answers cached in MariaDB.** Summaries and answers are generated once; a cache hit takes 2–7 ms. | `summary_cache`, `answer_cache`. The demo never waits for the model. | tables with a `source_hash` per language row |
 
-Every LLM output comes only from the text it was given. Each fact carries the sentence it came from, the output is JSON with a fixed schema, and the model is `claude-haiku-5-5`.
+Every LLM output comes only from the text it was given. Each fact carries the sentence it came from, the output is JSON with a fixed schema. New answers and translations use `deepseek-4-1-flash` on Verda inference (OpenAI-compatible API); answers cached before 2026-11-15 were written by Anthropic `claude-haiku-5-5`.
 
 ### Multilingual: fi, sv, en
 
@@ -52,7 +54,7 @@ flowchart LR
   B["Browser<br/>Vite + three.js"] -->|"/api/*"| F["FastAPI :8002<br/>serves API + dist/"]
   F --> M[("MariaDB :3307")]
   F -->|"embed question"| O["Ollama bge-m3<br/>:11434"]
-  F -->|"summaries, answers"| L["LLM claude-haiku<br/>(Anthropic API)"]
+  F -->|"summaries, answers"| L["LLM deepseek-4-1-flash<br/>(Verda inference API)"]
   M --- R["wikirag<br/>article, article_vector, chunk_vector,<br/>article_coord, summary_cache, answer_cache"]
   M --- H["wikihistory<br/>article WITH SYSTEM VERSIONING,<br/>history_stats, month_stats, section_history"]
 ```
@@ -124,7 +126,8 @@ Settings are environment variables (or a `.env` next to `backend/rag_common.py`)
 | --- | --- | --- |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | `127.0.0.1`, `3307`, organizers' defaults | MariaDB with both databases |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama with `bge-m3` (embeds the question) |
-| `ANTHROPIC_API_KEY` | none, set it in the backend `.env` | only needed for questions that are not cached yet |
+| `VERDA_API_KEY`, `VERDA_BASE_URL`, `VERDA_MODEL` | none, `https://inference.verda.com/v1`, `deepseek-4-1-flash-1017` | LLM for questions/translations that are not cached yet (set in the backend env file, never in the repo) |
+| `LLM_PROVIDER` | `verda` | `anthropic` switches back to the Claude client (`ANTHROPIC_API_KEY`) |
 | `ASK_LLM` | `1` | `0` turns LLM calls off (cached answers only) |
 
 Embedding a question needs Ollama with `bge-m3` and options `{"num_ctx": 8192, "num_batch": 8192}`. Do not bulk-embed on a small CPU box: about 3.6 s per 300-word chunk on 2 vCPU.
@@ -176,4 +179,4 @@ The demo script and its dry runs are in `docs/DEMO.md` and `docs/memory/research
 - Data: Wikipedia, under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Every result links back to its article or version (`?curid=` / `?oldid=`). Anything derived from the text, including vectors and coordinates, is shared under the same licence.
 - Images: Wikimedia Commons only. The artist and licence of each image are shown in the UI (for example "Image: Imonoz, CC BY-SA 4.0").
 - Datasets and reference code: [MariaDB Foundation](https://mariadb.org/) (Robert Silén), MIT licence: [mariadb-wikipedia-datasets](https://github.com/MariaDB/mariadb-wikipedia-datasets), [mariadb-vector-wikipedia-rag](https://github.com/MariaDB/mariadb-vector-wikipedia-rag), [mariadb-system-versioning-wikipedia](https://github.com/MariaDB/mariadb-system-versioning-wikipedia). Files copied from them keep their licence notice.
-- Embedding model: [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) via [Ollama](https://ollama.com/). Answers: Anthropic `claude-haiku-5-5`. 3D: [three.js](https://threejs.org/).
+- Embedding model: [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) via [Ollama](https://ollama.com/). Answers: `deepseek-4-1-flash` on Verda inference (earlier cached answers: Anthropic `claude-haiku-5-5`). 3D: [three.js](https://threejs.org/).

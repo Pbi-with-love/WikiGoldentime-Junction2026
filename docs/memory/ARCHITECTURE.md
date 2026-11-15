@@ -43,6 +43,11 @@ offers related articles to keep reading. Judges are the authors of the organizer
   **Frontend deploy (every spec that changes src/, index.html or styles):** `npm run build` locally, then
   `rsync -az --delete -e "ssh -i ~/.ssh/id_serverTech -o IdentitiesOnly=yes" dist/ root@72.61.20.120:/root/wikimemory/dist/`
   (no api restart needed). Check `curl -s http://127.0.0.1:8002/ | grep assets/index-` on the VPS shows the new hash.
+  **Public URL (2026-11-15):** https://wikimemory.tech (DNS at Hostinger: A @ -> 72.61.20.120, CNAME www -> wikimemory.tech).
+  Caddy v2 (systemd `caddy`, `/etc/caddy/Caddyfile`, default saved as `Caddyfile.default.bak`) terminates HTTPS
+  (Let's Encrypt, auto-renew), `encode zstd gzip`, `reverse_proxy 127.0.0.1:8002`; www -> 301 to the apex; access log
+  `/var/log/caddy/wikimemory.log` (owner caddy). ufw allows only OpenSSH, 80/tcp, 443/tcp. The app and MariaDB still bind
+  127.0.0.1. `npm run e2e` works against it: `BASE_URL=https://wikimemory.tech npm run e2e`.
   Layout: frontend at the repo root (index.html, src/, vite.config.js -> dist/), backend in backend/ + scripts/.
 
 ## Schemas

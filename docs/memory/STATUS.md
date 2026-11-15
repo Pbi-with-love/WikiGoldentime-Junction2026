@@ -156,6 +156,7 @@ Open user items: Wikimedia User-Agent contact still placeholder (use repo URL); 
 license/artist in API+UI; Mac Ollama was uninstalled (brew also removed python@3.15, harmless).
 
 ## Specs
+PUBLIC 2026-11-15 02:30 EET: https://wikimemory.tech live (Caddy + Let's Encrypt on the VPS, ufw 80/443), e2e 13/13 against the public URL. LLM provider switched to Verda (deepseek-4-1-flash, 60 req/min tenant limit, retry + concurrency cap, 6b25652).
 LATEST 2026-11-15 01:50 EET: 034 + 035 + geo-panel + road-chips merged and deployed index-B4NoYfVO.js (backend main.py + road.py match), e2e 13/13 on deployed; not yet pushed.
 EARLIER 2026-11-15 ~00:50 EET: specs 027-033 + README done; deployed index-Cbgx6MAa.js; e2e 13/13 on deployed; branch Pbi-with-love/resume-work not yet merged into main.
 Deployed 2026-11-14 (merge of 029+030+031, branch Pbi-with-love/resume-work): frontend index-BKdWSYhL.js, backend main.py + compare.py match local (md5). 032 E2E suite next, then dry run 4.
